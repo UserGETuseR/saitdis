@@ -1,0 +1,241 @@
+// «ОГОНЬ ДУШИ» — схема данных.
+//
+// Для локальной разработки используется SQLite. Чтобы переключиться на
+// PostgreSQL в production, замените provider ниже на "postgresql" и укажите
+// DATABASE_URL в формате postgresql://...  Модель намеренно не использует
+// Prisma enum (их нет в SQLite): статусы и типы хранятся строками и
+// валидируются на уровне приложения (см. src/lib/constants.ts + Zod-схемы).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Каталог
+// ---------------------------------------------------------------------------
+
+model Category {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  description String?
+  sortOrder   Int       @default(0)
+  isHidden    Boolean   @default(false)
+  products    Product[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([sortOrder])
+}
+
+model Product {
+  id               String   @id @default(cuid())
+  slug             String   @unique
+  categoryId       String
+  category         Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  name             String
+  shortDescription String?
+  fullDescription  String?
+  composition      String?
+
+  // WEIGHTED | FIXED_PORTION | UNIT | SIZE_VARIANT
+  productType      String
+
+  // Цена базовой единицы в копейках:
+  //   WEIGHTED       — цена за baseWeightGrams (обычно 100 г)
+  //   FIXED_PORTION  — цена за 1 порцию
+  //   UNIT           — цена за 1 штуку
+  //   SIZE_VARIANT   — цена за 1 позицию выбранного размера
+  basePriceKopecks Int
+
+  baseWeightGrams  Int?     // вес базовой единицы (для расчёта и для min-веса)
+  weightStepGrams  Int?     // шаг изменения веса (обычно 100)
+  minWeightGrams   Int?     // минимальный выбираемый вес
+  maxWeightGrams   Int?     // максимальный выбираемый вес (для UI-кнопок)
+  unitLabel        String?  // "г", "шт", "порция", "30 см" и т.п.
+  sizeLabel        String?  // отображаемый размер для SIZE_VARIANT
+
+  imageUrl         String?
+
+  isAvailable      Boolean  @default(true)   // «Нет в наличии» = false
+  isHidden         Boolean  @default(false)  // скрыт из каталога (архив/черновик)
+  needsConfirmation Boolean @default(false)  // требует подтверждения владельца
+
+  allergens        String?
+  isSpicy          Boolean  @default(false)  // «Острое»
+  isFeatured       Boolean  @default(false)  // «Популярное»
+  isNew            Boolean  @default(false)  // «Новинка»
+
+  sortOrder        Int      @default(0)
+
+  orderItems       OrderItem[]
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([categoryId, sortOrder])
+  @@index([isHidden, isAvailable])
+}
+
+// ---------------------------------------------------------------------------
+// Заказы
+// ---------------------------------------------------------------------------
+
+model Order {
+  id     String @id @default(cuid())
+  number String @unique // человекочитаемый номер, напр. "OD-260724-0007"
+
+  // NEW | CONFIRMED | COOKING | READY | COURIER | COMPLETED | CANCELLED
+  status String @default("NEW")
+
+  // DELIVERY | PICKUP
+  fulfillmentType String
+
+  customerName String
+  phone        String // нормализованный формат +7XXXXXXXXXX
+
+  // Адрес (для DELIVERY)
+  street    String?
+  apartment String?
+  entrance  String?
+  floor     String?
+  intercom  String?
+
+  // Время
+  timingMode  String   @default("ASAP") // ASAP | SCHEDULED
+  scheduledAt DateTime?
+
+  comment String?
+
+  // CASH | TRANSFER | CARD_ONLINE | SBP
+  paymentMethod String
+  // NOT_REQUIRED | PENDING | WAITING_FOR_CONFIRMATION | PAID | FAILED | CANCELLED | REFUNDED
+  paymentStatus String @default("NOT_REQUIRED")
+  paymentProviderRef String?
+
+  // Суммы (в копейках)
+  itemsSubtotalKopecks Int
+  deliveryKopecks      Int? // null => уточняет оператор
+  totalKopecks         Int
+  totalWeightGrams     Int  @default(0)
+
+  // FREE | OPERATOR_CONFIRMATION | FIXED
+  deliveryCalc String
+
+  consent Boolean @default(false)
+
+  // Статусы уведомлений: PENDING | SENT | FAILED | SKIPPED
+  telegramStatus String  @default("PENDING")
+  telegramError  String?
+  emailStatus    String  @default("SKIPPED")
+  emailError     String?
+
+  idempotencyKey String? @unique
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Снимок товара на момент заказа (не полагаемся на актуальный Product):
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  name        String
+  productType String
+  unitLabel   String?
+
+  grams            Int? // для WEIGHTED
+  quantity         Int  @default(1)
+  unitPriceKopecks Int  // цена базовой единицы на момент заказа
+  lineTotalKopecks Int
+  needsConfirmation Boolean @default(false)
+
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------------------
+// Настройки, доставка, акции, отзывы
+// ---------------------------------------------------------------------------
+
+model Setting {
+  key       String   @id
+  value     String   // строка или JSON-строка
+  updatedAt DateTime @updatedAt
+}
+
+model DeliveryZone {
+  id                 String  @id @default(cuid())
+  name               String
+  description        String?
+  minOrderKopecks    Int     @default(0)
+  deliveryKopecks    Int?    // null => уточняет оператор
+  freeThresholdKopecks Int?
+  etaMinutes         Int?
+  isActive           Boolean @default(true)
+  providerMeta       String? // JSON: границы/полигон/провайдер
+  sortOrder          Int     @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Promo {
+  id        String   @id @default(cuid())
+  title     String
+  body      String?
+  kind      String   @default("info") // info | free_delivery | discount | seasonal | set
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Review {
+  id          String   @id @default(cuid())
+  authorName  String
+  rating      Int      @default(5)
+  body        String
+  isPublished Boolean  @default(false)
+  externalUrl String?
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Администрирование
+// ---------------------------------------------------------------------------
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String   // scrypt-хеш
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String
+  action    String
+  entity    String?
+  entityId  String?
+  meta      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

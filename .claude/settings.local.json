@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(npx tsx *)",
+      "Bash(npx vitest *)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(npx playwright *)",
+      "Bash(grep -E \"Compiled|Failed|error|✓|Route|/$|✗\")",
+      "Bash(npm i *)",
+      "Bash(gh auth *)",
+      "Bash(gh api *)",
+      "Bash(git init *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(grep -E \"^\\\\.env$|node_modules/|\\\\.next/|\\\\.db$|uploads/[^.]\")"
+    ]
+  }
+}
