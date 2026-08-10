@@ -74,6 +74,7 @@ model AuthSession {
   userId      String
   tokenHash   String       @unique
   deviceLabel String?
+  mode        String       @default("CLIENT")
   state       String       @default("ACTIVE")
   createdAt   DateTime     @default(now())
   expiresAt   DateTime
@@ -86,6 +87,8 @@ model TelegramLoginRequest {
   id             String   @id @default(uuid())
   tokenHash      String   @unique
   state          String   @default("PENDING")
+  mode           String   @default("CLIENT")
+  staffInviteId  String?
   telegramUserId String?
   chatId         String?
   expiresAt      DateTime
@@ -94,6 +97,21 @@ model TelegramLoginRequest {
   createdAt      DateTime @default(now())
   @@index([state, expiresAt])
   @@index([telegramUserId])
+  @@index([staffInviteId, state])
+}
+
+model StaffInvite {
+  id             String   @id @default(uuid())
+  organizationId String
+  tokenHash      String   @unique
+  fullName       String
+  role           String
+  state          String   @default("PENDING")
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  acceptedByUserId String?
+  createdAt      DateTime @default(now())
+  @@index([organizationId, state, expiresAt])
 }
 
 model TelegramAdminChat {
