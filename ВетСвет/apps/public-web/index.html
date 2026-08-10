@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="VetSvet — современная забота о здоровье и жизни питомца." />
+    <title>Вет*Свет — когда важно всё</title>
+    <style>
+      :root {
+        --ink: #111312;
+        --paper: #f4f1eb;
+        --paper-muted: #e8e3da;
+        --teal: #064e54;
+        --teal-deep: #053b40;
+        --mint: #c5f7da;
+        --gold: #dbb576;
+        --line: rgba(17, 19, 18, 0.16);
+        --radius: 1.25rem;
+        --ease: cubic-bezier(.22, .75, .2, 1);
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; background: var(--paper); }
+      body { margin: 0; color: var(--ink); background: radial-gradient(circle at 92% 18%, rgba(197,247,218,.34), transparent 21rem), var(--paper); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-x: hidden; }
+      a { color: inherit; text-decoration: none; }
+      button { font: inherit; }
+      .skip-link { position: fixed; z-index: 100; left: 1rem; top: -5rem; padding: .75rem 1rem; background: var(--paper); color: var(--ink); border-radius: .5rem; transition: top .2s; }
+      .skip-link:focus { top: 1rem; }
+      .scroll-progress { position: fixed; z-index: 80; left: 0; top: 0; width: 100%; height: 3px; background: rgba(255,255,255,.12); transform-origin: left; transform: scaleX(0); box-shadow: 0 0 18px rgba(197,247,218,.8); pointer-events: none; }
+      .shell { width: min(1440px, calc(100% - 48px)); margin: 0 auto; }
+      .topbar { position: absolute; z-index: 20; left: 0; right: 0; top: 0; padding: 20px 0; color: white; }
+      .nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .65rem .75rem .65rem 1.1rem; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: rgba(7, 18, 17, .32); backdrop-filter: blur(18px); }
+      .brand { display: flex; align-items: center; gap: .55rem; letter-spacing: -.075em; font-weight: 900; font-size: 1.28rem; white-space: nowrap; }
+      .brand-mark { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; color: var(--ink); background: var(--mint); border-radius: 50%; font-size: 1.5rem; line-height: 1; }
+      .nav-links { display: flex; align-items: center; gap: 1.4rem; color: rgba(255,255,255,.76); font-size: .86rem; }
+      .nav-links a:hover { color: white; }
+      .nav-actions { display: flex; gap: .55rem; align-items: center; }
+      .staff-entry { display: inline-flex; align-items: center; gap: .48rem; min-height: 44px; padding: 0 .78rem 0 .6rem; border: 1px solid rgba(197,247,218,.42); border-radius: 999px; color: var(--mint); font-size: .77rem; font-weight: 800; transition: transform .25s var(--ease), background .25s; }
+      .staff-entry::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 5px rgba(197,247,218,.13), 0 0 19px var(--mint); animation: beacon 1.9s ease-in-out infinite; }
+      .staff-entry:hover { color: var(--ink); background: var(--mint); transform: translateY(-2px); }
+      .button { display: inline-flex; align-items: center; justify-content: center; gap: .55rem; min-height: 44px; padding: 0 1rem; border: 1px solid transparent; border-radius: 999px; font-size: .88rem; font-weight: 700; cursor: pointer; transition: transform .25s var(--ease), background .25s, color .25s, border-color .25s; }
+      .button:hover { transform: translateY(-2px); }
+      .button:focus-visible, a:focus-visible { outline: 3px solid var(--mint); outline-offset: 3px; }
+      .button-light { background: var(--paper); color: var(--ink); }
+      .button-ghost { color: white; border-color: rgba(255,255,255,.35); background: transparent; }
+      .hero { position: relative; min-height: min(900px, 100svh); display: flex; align-items: end; color: white; overflow: clip; background: var(--teal-deep); }
+      .hero::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(1,18,20,.9) 0%, rgba(1,24,27,.48) 42%, rgba(0,19,22,.12) 78%), linear-gradient(0deg, rgba(1,13,14,.82) 0%, transparent 45%); z-index: 1; }
+      .hero-image { position: absolute; inset: 0; background-image: url("../../Photo/ВетВрач и собака.png"); background-position: 70% center; background-size: cover; transform: scale(1.04); animation: breathe 16s ease-in-out infinite alternate; }
+      .hero-orbit { position: absolute; z-index: 2; top: 20%; left: 52%; width: clamp(290px, 32vw, 510px); aspect-ratio: 1; border: 1px solid rgba(197,247,218,.32); border-radius: 50%; transform: translateX(-50%); }
+      .hero-orbit::before, .hero-orbit::after { content: ""; position: absolute; border-radius: 50%; }
+      .hero-orbit::before { width: 12px; height: 12px; right: 18%; top: 8%; background: var(--mint); box-shadow: 0 0 32px 9px rgba(197,247,218,.55); }
+      .hero-orbit::after { inset: 16%; border: 1px solid rgba(255,255,255,.12); }
+      .hero-content { position: relative; z-index: 6; width: min(1440px, calc(100% - 48px)); margin: 0 auto; padding: 9rem 0 4.25rem; pointer-events:none; }
+      .eyebrow { display: flex; align-items: center; gap: .6rem; margin: 0 0 1.4rem; color: var(--mint); font-size: .72rem; font-weight: 800; letter-spacing: .17em; text-transform: uppercase; }
+      .eyebrow::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 6px rgba(197,247,218,.14); }
+      h1 { max-width: 920px; margin: 0; letter-spacing: -.085em; font-size: clamp(4rem, 9.3vw, 9.5rem); line-height: .81; font-weight: 900; }
+      h1 em { color: var(--mint); font-style: normal; }
+      .hero-bottom { display: flex; align-items: end; justify-content: space-between; gap: 1.5rem; margin-top: 2rem; }
+      .hero-copy { max-width: 420px; color: rgba(255,255,255,.85); font-size: clamp(1rem, 1.7vw, 1.25rem); line-height: 1.4; }
+      .hero-copy strong { color: white; }
+      .hero-actions { position:relative; z-index:7; display: flex; gap: .65rem; flex-wrap: wrap; pointer-events:auto; }
+      .scroll-cue { position: absolute; right: 0; bottom: 4.2rem; display: flex; align-items: center; gap: .7rem; color: rgba(255,255,255,.65); font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; writing-mode: vertical-rl; }
+      .scroll-cue::after { content: ""; height: 76px; width: 1px; background: linear-gradient(white, transparent); }
+      .hero-stamp { position: absolute; z-index: 4; right: 5.2vw; top: 26%; display: grid; place-items: center; width: 126px; aspect-ratio: 1; border: 1px solid rgba(255,255,255,.34); border-radius: 50%; color: white; text-align: center; font-size: .67rem; line-height: 1.15; letter-spacing: .1em; text-transform: uppercase; transform: rotate(13deg); }
+      .hero-stamp b { color: var(--mint); font-size: 1rem; }
+      .app-constellation { position: absolute; z-index: 4; right: clamp(1.5rem, 6vw, 7rem); bottom: 3.6rem; width: min(29vw, 390px); min-width: 350px; height: 330px; perspective: 1100px; pointer-events: none; }
+      .app-plane { position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .22s ease-out; }
+      .app-card { position: absolute; overflow: hidden; border: 1px solid rgba(255,255,255,.25); border-radius: 1.15rem; background: linear-gradient(135deg, rgba(255,255,255,.2), rgba(255,255,255,.055)); box-shadow: 0 24px 60px rgba(0,0,0,.32); backdrop-filter: blur(18px); }
+      .app-card::after { content:""; position:absolute; inset:0; background:linear-gradient(115deg, transparent 25%, rgba(255,255,255,.28), transparent 50%); transform:translateX(-130%); animation: glint 6s ease-in-out infinite; }
+      .app-summary { z-index:3; right:0; bottom:0; width:272px; padding:1.05rem; transform: translateZ(58px) rotateY(-10deg) rotateX(4deg); }
+      .app-summary small,.app-mini small { display:block; color:var(--mint); font-size:.62rem; letter-spacing:.13em; text-transform:uppercase; }
+      .app-summary b { display:block; margin:.55rem 0 .22rem; font-size:1.18rem; letter-spacing:-.045em; }
+      .app-summary p { margin:0; color:rgba(255,255,255,.7); font-size:.76rem; line-height:1.35; }
+      .app-bars { display:flex; align-items:end; gap:5px; height:36px; margin-top:1rem; }
+      .app-bars i { display:block; width:17%; border-radius:5px 5px 2px 2px; background:var(--mint); opacity:.86; }
+      .app-bars i:nth-child(1){height:35%}.app-bars i:nth-child(2){height:70%}.app-bars i:nth-child(3){height:48%}.app-bars i:nth-child(4){height:94%}.app-bars i:nth-child(5){height:62%}
+      .app-mini { z-index:1; left:0; top:10px; width:180px; padding:.95rem; transform: translateZ(12px) rotateY(13deg) rotateX(-5deg); opacity:.75; }
+      .app-mini b { display:block; margin:.5rem 0 0; font-size:.88rem; letter-spacing:-.03em; }
+      .app-pet-dot { position:absolute; z-index:4; left:42%; top:40%; display:grid; place-items:center; width:63px; aspect-ratio:1; border-radius:50%; color:var(--ink); background:var(--mint); box-shadow:0 0 0 9px rgba(197,247,218,.1), 0 15px 35px rgba(0,0,0,.3); transform:translateZ(95px); font-weight:900; font-size:1.45rem; }
+      .staff-portal { position:relative; display:grid; grid-template-columns:.9fr 1.1fr; gap:clamp(2rem,6vw,7rem); align-items:center; min-height:500px; margin:-2.5rem auto 7rem; padding:clamp(2rem,4.5vw,4.5rem); overflow:hidden; isolation:isolate; border:1px solid rgba(197,247,218,.18); border-radius:2rem; color:white; background:radial-gradient(circle at 88% 10%, #1b8488, transparent 34%), linear-gradient(135deg, #082d2d, #0b2929 55%, #092124); box-shadow:0 32px 90px rgba(3,30,31,.22); }
+      .staff-portal::before { content:""; position:absolute; width:720px; aspect-ratio:1; right:-260px; bottom:-420px; border:1px solid rgba(197,247,218,.3); border-radius:50%; box-shadow:0 0 0 70px rgba(197,247,218,.035),0 0 0 140px rgba(197,247,218,.025); }
+      .staff-portal::after { content:"02 · ОДНА КОМАНДА"; position:absolute; z-index:-1; right:clamp(1.4rem,4vw,4rem); top:1.5rem; color:rgba(197,247,218,.52); font-size:.62rem; font-weight:800; letter-spacing:.16em; }
+      .staff-portal-copy{position:relative;z-index:1}.staff-portal-copy h2{max-width:530px;margin:.45rem 0 1.2rem;font-size:clamp(2.7rem,5.6vw,6.2rem);line-height:.86;letter-spacing:-.085em}.staff-portal-copy p{max-width:420px;color:rgba(255,255,255,.7);line-height:1.45}.staff-portal-copy .button{margin-top:1.15rem;background:var(--mint);color:var(--ink)}
+      .staff-terminal{position:relative;z-index:1;justify-self:end;width:min(100%,500px);padding:1rem;border:1px solid rgba(255,255,255,.19);border-radius:1.15rem;background:rgba(1,20,20,.47);box-shadow:0 35px 80px rgba(0,0,0,.32);backdrop-filter:blur(20px);transform:perspective(950px) rotateY(-10deg) rotateX(3deg);transition:transform .45s var(--ease)}.staff-portal:hover .staff-terminal{transform:perspective(950px) rotateY(-4deg) rotateX(1deg) translateY(-7px)}
+      .terminal-top{display:flex;align-items:center;justify-content:space-between;padding:.25rem .2rem .8rem;color:rgba(255,255,255,.66);font-size:.68rem}.terminal-top span{display:flex;gap:5px}.terminal-top i{width:7px;height:7px;border-radius:50%;background:#d5f6db}.terminal-grid{display:grid;grid-template-columns:1fr .75fr;gap:.7rem}.terminal-block{padding:.85rem;border:1px solid rgba(255,255,255,.12);border-radius:.78rem;background:rgba(255,255,255,.065)}.terminal-block small{color:var(--mint);font-size:.62rem}.terminal-block b{display:block;margin:.35rem 0;font-size:1.45rem;letter-spacing:-.06em}.terminal-block p{margin:0;color:rgba(255,255,255,.61);font-size:.68rem;line-height:1.35}.terminal-list{grid-column:span 2;display:grid;gap:.1rem}.terminal-row{display:flex;justify-content:space-between;padding:.58rem 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:.7rem}.terminal-row:last-child{border:0}.terminal-row span:last-child{color:var(--mint)}
+      .intro { padding: clamp(5rem, 10vw, 10rem) 0 4.5rem; }
+      .intro-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(240px, .54fr); gap: 2rem; align-items: end; }
+      .display { margin: 0; font-size: clamp(2.65rem, 6.5vw, 7.25rem); line-height: .9; letter-spacing: -.08em; font-weight: 850; }
+      .intro aside { padding: 1.25rem 0; border-top: 1px solid var(--line); font-size: 1.08rem; line-height: 1.45; color: #565551; }
+      .word { display: inline-block; opacity: .08; transform: translateY(18px); filter: blur(4px); transition: opacity .55s var(--ease), transform .55s var(--ease), filter .55s var(--ease); }
+      .words-in .word { opacity: 1; transform: none; filter: none; }
+      .route-section { padding: 1rem 0 7rem; }
+      .section-kicker { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: 1.2rem; font-size: .75rem; color: #696760; letter-spacing: .12em; text-transform: uppercase; }
+      .route-grid { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 26px 55px rgba(31,40,37,.06); }
+      .route-card { position: relative; min-height: 350px; padding: 1.4rem; display: flex; flex-direction: column; justify-content: end; background: var(--paper); border-left: 1px solid var(--line); overflow: hidden; isolation: isolate; transform-style: preserve-3d; will-change: transform; transition: transform .45s var(--ease), box-shadow .45s var(--ease), background .45s var(--ease); }
+      .route-card:first-child { border-left: 0; }
+      .route-card::before { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(circle at 88% 9%, var(--route-glow, rgba(6,78,84,.17)), transparent 42%); transition: transform .65s var(--ease); }
+      .route-card::after { content:""; position:absolute; z-index:-1; left:-32%; bottom:-82%; width:145%; aspect-ratio:1; border:1px solid currentColor; border-radius:50%; opacity:.09; transition:transform .75s var(--ease), opacity .4s var(--ease); }
+      .route-card:hover::before { transform: scale(1.35); }
+      .route-card:hover::after { opacity:.2; transform:translate(9%,-8%) scale(.94); }
+      .route-card:hover { z-index: 2; box-shadow: 0 26px 50px rgba(5,59,64,.16); }
+      .route-card:nth-child(1) { --route-glow: rgba(219,181,118,.5); }
+      .route-card:nth-child(2) { --route-glow: rgba(197,247,218,.62); }
+      .route-card:nth-child(3) { color: white; background: var(--teal); --route-glow: rgba(197,247,218,.31); }
+      .route-card:nth-child(4) { --route-glow: rgba(6,78,84,.42); }
+      .route-number { position: absolute; left: 1.3rem; top: 1rem; font-size: .75rem; letter-spacing: .12em; opacity: .65; }
+      .route-icon { position: absolute; right: 1.15rem; top: 1rem; font-size: 2.3rem; line-height: 1; }
+      .route-card h3 { max-width: 210px; margin: 0 0 .7rem; font-size: clamp(1.45rem, 2vw, 2.15rem); line-height: .96; letter-spacing: -.06em; transition:transform .35s var(--ease); }
+      .route-card p { max-width: 225px; margin: 0; color: inherit; opacity: .72; font-size: .93rem; line-height: 1.35; }
+      .route-card .arrow { margin-top: 1.25rem; width: 2.4rem; height: 2.4rem; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 1.2rem; transition: transform .25s var(--ease), background .25s, color .25s; }
+      .route-card:hover .arrow { color: var(--ink); background: var(--mint); transform: translate(5px, -5px); }
+      .route-card:hover h3 { transform:translateY(-5px); }
+      .experience { position: relative; padding: clamp(5rem, 10vw, 10rem) 0; overflow: hidden; color: white; background: var(--ink); }
+      .experience::before { content: ""; position: absolute; inset: 0; opacity: .28; background: linear-gradient(115deg, transparent 27%, rgba(197,247,218,.25), transparent 59%); transform: skewY(-6deg) translateY(-40%); }
+      .experience .shell { position: relative; }
+      .experience-heading { max-width: 900px; margin: 0 0 4rem; font-size: clamp(2.8rem, 6.8vw, 7.5rem); line-height: .88; letter-spacing: -.085em; }
+      .experience-heading i { font-style: normal; color: var(--mint); }
+      .story-grid { position:relative; display: grid; grid-template-columns: .68fr 1fr 1.05fr; gap: 1rem; align-items: stretch; }
+      .story-grid::before { content:""; position:absolute; z-index:0; left:16%; right:12%; top:50%; height:1px; background:linear-gradient(90deg, transparent, rgba(197,247,218,.6), transparent); opacity:.65; }
+      .story-grid > * { position:relative; z-index:1; }
+      .story-copy { display: flex; flex-direction: column; justify-content: space-between; min-height: 480px; padding: 1.55rem; border: 1px solid rgba(255,255,255,.18); border-radius: var(--radius); }
+      .story-copy p { max-width: 260px; margin: 0; color: rgba(255,255,255,.72); font-size: 1.04rem; line-height: 1.4; }
+      .story-copy b { font-size: 1.3rem; letter-spacing: -.04em; }
+      .story-photo { position: relative; min-height: 480px; overflow: hidden; border-radius: var(--radius); transform-style: preserve-3d; box-shadow: 0 24px 55px rgba(5,59,64,.14); }
+      .story-photo img { width: 100%; height: 100%; object-fit: cover; transition: transform 1s var(--ease); }
+      .story-photo:hover img { transform: scale(1.07); }
+      .status { position: relative; overflow: hidden; transition: transform .4s var(--ease), box-shadow .4s var(--ease); }
+      .status::after { content:""; position:absolute; inset:auto -25% -55% auto; width:120px; aspect-ratio:1; border-radius:50%; background:rgba(197,247,218,.22); filter:blur(2px); transition:transform .6s var(--ease); }
+      .status:hover { transform: translateX(8px) perspective(800px) rotateY(-2deg); box-shadow: 0 16px 30px rgba(0,0,0,.22); }
+      .status:hover::after { transform:scale(1.5); }
+      .photo-label { position: absolute; right: 1rem; bottom: 1rem; padding: .55rem .75rem; color: var(--ink); background: var(--paper); border-radius: 999px; font-size: .75rem; font-weight: 700; }
+      .status-stack { display: grid; gap: .8rem; align-content: center; }
+      .status { padding: 1.15rem 1.15rem 1.2rem; border-radius: 1rem; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.13); }
+      .status small { display: flex; align-items: center; gap: .45rem; color: var(--mint); font-size: .68rem; letter-spacing: .11em; text-transform: uppercase; }
+      .status small::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
+      .status h3 { margin: .75rem 0 .35rem; font-size: 1.3rem; letter-spacing: -.045em; }
+      .status p { margin: 0; color: rgba(255,255,255,.65); font-size: .88rem; line-height: 1.35; }
+      .trust { padding: clamp(5rem, 9vw, 9rem) 0; }
+      .trust-grid { display: grid; grid-template-columns: .75fr 1.25fr; gap: 3rem; }
+      .trust-heading { position: sticky; top: 2rem; align-self: start; }
+      .trust-heading h2 { margin: .8rem 0 1.2rem; font-size: clamp(2.6rem, 5vw, 5.5rem); line-height: .9; letter-spacing: -.08em; }
+      .trust-heading p { max-width: 350px; color: #605d56; line-height: 1.45; }
+      .principles { border-top: 1px solid var(--line); }
+      .principle { position:relative; display: grid; grid-template-columns: 50px 1fr auto; gap: 1rem; align-items: center; padding: 1.2rem 0; border-bottom: 1px solid var(--line); transition:padding .35s var(--ease), color .35s var(--ease); }
+      .principle::after { content:"↗"; position:absolute; right:.1rem; top:50%; color:var(--teal); font-size:1.15rem; opacity:0; transform:translate(-10px,-50%); transition:opacity .25s var(--ease), transform .25s var(--ease); }
+      .principle:hover { padding-left:.65rem; padding-right:2rem; background:linear-gradient(90deg, rgba(197,247,218,.34), transparent 74%); }.principle:hover::after { opacity:1; transform:translate(0,-50%); }
+      .principle-number { color: var(--teal); font-size: .75rem; font-weight: 800; }
+      .principle h3 { margin: 0; font-size: clamp(1.2rem, 2vw, 1.7rem); letter-spacing: -.045em; }
+      .principle p { margin: 0; color: #68655e; font-size: .91rem; line-height: 1.38; }
+      .emergency { padding: 1rem 0 5.5rem; }
+      .emergency-card { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 2rem; align-items: end; padding: clamp(2rem, 5vw, 4.5rem); overflow: hidden; border:1px solid rgba(255,255,255,.22); border-radius: 1.5rem; color: white; background:radial-gradient(circle at 84% 18%, rgba(255,211,158,.33), transparent 21%), #9f3926; box-shadow:0 28px 66px rgba(120,42,24,.2); }
+      .emergency-card::after { content: ""; position: absolute; width: 490px; aspect-ratio: 1; right: -130px; top: -260px; border: 1px solid rgba(255,255,255,.32); border-radius: 50%; box-shadow: 0 0 0 58px rgba(255,255,255,.06), 0 0 0 118px rgba(255,255,255,.035); }
+      .emergency-card > * { position: relative; z-index: 1; }
+      .emergency-card h2 { max-width: 740px; margin: .5rem 0 0; font-size: clamp(2.4rem, 5.7vw, 6rem); line-height: .86; letter-spacing: -.08em; }
+      .emergency-card p { max-width: 520px; margin: 1.25rem 0 0; color: rgba(255,255,255,.82); line-height: 1.45; }
+      .emergency-card .button { align-self: end; background: white; color: var(--ink); white-space: nowrap; }
+      footer { padding: 1.75rem 0; color: rgba(255,255,255,.8); background: var(--ink); }
+      .footer-inner { display: flex; justify-content: space-between; gap: 1rem; align-items: center; font-size: .8rem; }
+      .reveal { opacity: 0; transform: translateY(28px); transition: opacity .75s var(--ease), transform .75s var(--ease); }
+      .reveal.is-visible { opacity: 1; transform: none; }
+      @keyframes breathe { from { transform: scale(1.04) translate3d(0,0,0); } to { transform: scale(1.11) translate3d(-1.2%,.6%,0); } }
+      @keyframes beacon { 50% { opacity:.42; transform:scale(.76); } }
+      @keyframes glint { 18%,100% { transform:translateX(130%); } }
+      @media (max-width: 850px) {
+        .shell, .hero-content { width: min(100% - 32px, 1440px); }
+        .nav-links { display: none; }
+        .nav { padding-left: .85rem; }
+        .hero { min-height: 760px; }
+        .hero::before { background:linear-gradient(90deg, rgba(1,18,20,.88) 0%, rgba(1,24,27,.5) 50%, rgba(0,19,22,.1) 100%), linear-gradient(0deg, rgba(1,13,14,.9) 0%, transparent 57%); }
+        .hero-image { background-position: 64% center; }
+        .hero-orbit { top: 18%; left: 60%; }
+        .hero-stamp { display: none; }
+        .app-constellation { right:1rem; bottom:1.4rem; width:228px; min-width:0; height:174px; opacity:1; transform:none; }
+        .app-mini,.app-pet-dot { display:none; }
+        .app-summary { width:218px; padding:.9rem; transform:translateZ(35px) rotateY(-6deg) rotateX(2deg); }
+        .app-summary b { margin:.38rem 0 .12rem; font-size:1.02rem; }.app-summary p { font-size:.68rem; }.app-bars { height:24px; margin-top:.65rem; }
+        .staff-portal{grid-template-columns:1fr;margin:-1.5rem auto 6rem}.staff-terminal{justify-self:start}
+        h1 { font-size: clamp(4rem, 17vw, 7rem); max-width: 620px; }
+        .hero-bottom { align-items: start; flex-direction: column; }
+        .scroll-cue { display: none; }
+        .route-grid { grid-template-columns: repeat(2, 1fr); }
+        .route-card:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
+        .route-card:nth-child(4) { border-top: 1px solid var(--line); }
+        .story-grid { grid-template-columns: 1fr 1fr; }
+        .story-copy { grid-column: span 2; min-height: 200px; }
+        .trust-grid { grid-template-columns: 1fr; gap: 1rem; }
+        .trust-heading { position: static; }
+      }
+      /* Tablet, foldable and portrait layouts: one signal is stronger than a pile of windows. */
+      @media (max-width: 1100px), (orientation: portrait) {
+        .app-constellation { right:clamp(.8rem,3vw,1.8rem); bottom:1.25rem; width:232px; min-width:0; height:176px; opacity:1; transform:none; }
+        .app-mini,.app-pet-dot { display:none !important; }
+        .app-summary { right:0; bottom:0; width:222px; padding:.9rem; transform:translateZ(28px) rotateY(-5deg) rotateX(2deg); }
+        .app-summary b { margin:.38rem 0 .12rem; font-size:1.02rem; }.app-summary p { font-size:.68rem; }.app-bars { height:24px; margin-top:.62rem; }
+        .hero-bottom { position:relative; z-index:7; }
+      }
+      @media (max-width: 560px) {
+        .topbar { padding-top: 12px; }
+        .brand { font-size: 1.05rem; }
+        .nav-actions .button-ghost { display: none; }
+        .nav-actions .button { min-height: 38px; padding: 0 .8rem; font-size: .78rem; }
+        .hero { min-height: 760px; }
+        .hero::before { background: linear-gradient(90deg, rgba(1,18,20,.9) 0%, rgba(1,24,27,.38) 76%), linear-gradient(0deg, rgba(1,13,14,.95) 0%, rgba(1,13,14,.12) 70%); }
+        .hero-image { background-position: 64% center; }
+        .hero-content { align-self:stretch; display:flex; flex-direction:column; justify-content:flex-end; padding-top:6.5rem; padding-bottom:11.4rem; }
+        .hero-orbit { width: 280px; top: 19%; left: 69%; }
+        .app-constellation{right:.65rem;bottom:.85rem;width:182px;height:142px}.app-summary{width:174px;padding:.72rem;border-radius:1rem;transform:translateZ(20px) rotateY(-4deg)}.app-summary small{font-size:.52rem}.app-summary b{margin:.26rem 0;font-size:.9rem}.app-summary p{display:none}.app-bars{height:18px;margin-top:.35rem;gap:3px}
+        .eyebrow { margin-bottom: 1rem; font-size: .61rem; }
+        h1 { font-size: clamp(3.65rem, 17vw, 5.5rem); }
+        .hero-copy { max-width: 300px; font-size: 1rem; }
+        .hero-actions { width: 100%; }
+        .hero-actions .button { flex: 1; }
+        .intro { padding: 5.25rem 0 3.5rem; }
+        .intro-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+        .display { font-size: clamp(2.8rem, 14vw, 4.7rem); }
+        .route-section { padding-bottom: 5rem; }
+        .route-grid { grid-template-columns: 1fr; }
+        .route-card { min-height: 245px; border-left: 0; border-top: 1px solid var(--line); transform:none !important; box-shadow:none !important; }
+        .story-grid::before { left:1rem; right:1rem; top:47%; }
+        .principle:hover { padding-left:0; padding-right:0; background:transparent; }.principle::after { display:none; }
+        .route-card:first-child { border-top: 0; }
+        .route-card:nth-child(3), .route-card:nth-child(4) { border-left: 0; }
+        .experience { padding: 5rem 0; }
+        .experience-heading { margin-bottom: 2rem; }
+        .story-grid { grid-template-columns: 1fr; }
+        .story-copy { grid-column: auto; min-height: 190px; }
+        .story-photo { min-height: 390px; }
+        .story-grid > .story-photo:first-of-type { display: none; }
+        .principle { grid-template-columns: 34px 1fr; gap: .65rem; }
+        .principle p { grid-column: 2; }
+        .emergency-card { grid-template-columns: 1fr; padding: 2rem 1.25rem; }
+        .emergency-card .button { justify-self: start; }
+        .staff-portal{min-height:0;margin:-1rem auto 5rem;padding:2.8rem 1.1rem 1.4rem;border-radius:1.45rem}.staff-portal::after{top:1.1rem;right:1.1rem;font-size:.52rem}.staff-portal-copy h2{font-size:clamp(3rem,15vw,4.5rem)}.staff-terminal{width:100%;transform:none}.staff-portal:hover .staff-terminal{transform:translateY(-3px)}
+        .footer-inner { align-items: start; flex-direction: column; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+        .word, .reveal { opacity: 1; filter: none; transform: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Перейти к содержанию</a>
+    <div class="scroll-progress" aria-hidden="true"></div>
+    <header class="topbar">
+      <nav class="nav shell" aria-label="Главная навигация">
+        <a href="#top" class="brand" aria-label="ВетСвет — на главную"><span class="brand-mark">*</span>ВЕТ<span>СВЕТ</span></a>
+        <div class="nav-links"><a href="#care">Направления</a><a href="#approach">Подход</a><a href="#emergency">Срочная помощь</a><a href="/auth/">Кабинет</a></div>
+        <div class="nav-actions"><a class="staff-entry" href="/staff/">Команде <span aria-hidden="true">↗</span></a><a class="button button-ghost" href="#emergency">Нужна помощь</a><a class="button button-light" href="#care">Записаться <span aria-hidden="true">↗</span></a></div>
+      </nav>
+    </header>
+    <main id="content">
+      <section class="hero" id="top" aria-label="VetSvet">
+        <div class="hero-image" role="img" aria-label="Ветеринар рядом с собакой в современной клинике"></div>
+        <div class="hero-orbit" aria-hidden="true"></div>
+        <div class="hero-stamp" aria-hidden="true"><span>забота<br><b>24/7</b><br>в памяти</span></div>
+        <div class="app-constellation" aria-hidden="true"><div class="app-plane"><div class="app-card app-mini"><small>Сейчас в VetSvet</small><b>8 питомцев<br>в заботе</b></div><div class="app-pet-dot">✦</div><div class="app-card app-summary"><small>Пульс организации</small><b>Забота в движении</b><p>Команда видит следующий шаг — владелец не остаётся в тишине.</p><div class="app-bars"><i></i><i></i><i></i><i></i><i></i></div></div></div></div>
+        <div class="hero-content">
+          <p class="eyebrow">VetSvet · больше, чем визит</p>
+          <h1>Когда<br>важно <em>всё.</em></h1>
+          <div class="hero-bottom">
+            <p class="hero-copy">Если питомец не может сказать, что с ним — <strong>мы умеем услышать.</strong> Спокойно, внимательно, по-настоящему рядом.</p>
+            <div class="hero-actions"><a class="button button-light" href="#care">Выбрать помощь <span aria-hidden="true">↘</span></a><a class="button button-ghost" href="/auth/">Мой кабинет <span aria-hidden="true">↗</span></a></div>
+          </div>
+        </div>
+        <div class="scroll-cue" aria-hidden="true">Листайте</div>
+      </section>
+      <section class="staff-portal shell" aria-labelledby="staff-title"><div class="staff-portal-copy"><p class="eyebrow">Для команды VetSvet</p><h2 id="staff-title">Внутри —<br>всё живёт<br>вместе.</h2><p>Пациенты, запись, рецепты груминга, клинический контекст, задачи и статус смены — в одном спокойном рабочем пространстве.</p><a class="button" href="/staff/">Открыть рабочее место <span aria-hidden="true">↗</span></a></div><div class="staff-terminal" aria-label="Превью рабочего пространства команды"><div class="terminal-top"><span><i></i><i></i><i></i></span><b>VetSvet / Today</b></div><div class="terminal-grid"><div class="terminal-block"><small>Следующий пациент</small><b>Мишка</b><p>Груминг · 10:00<br>есть прошлый recipe</p></div><div class="terminal-block"><small>В фокусе</small><b>03</b><p>задачи требуют<br>внимания команды</p></div><div class="terminal-block terminal-list"><div class="terminal-row"><span>Тиша · приём</span><span>подтверждено</span></div><div class="terminal-row"><span>Бакс · консультация</span><span>оплачено</span></div><div class="terminal-row"><span>Луна · груминг</span><span>через 35 мин</span></div></div></div></div></section>
+      <section class="intro shell" aria-labelledby="intro-title">
+        <div class="intro-grid">
+          <h2 class="display reveal words" id="intro-title">Здесь помнят не только карточку. Здесь помнят <span>вашего.</span></h2>
+          <aside class="reveal">Не нужно каждый раз собирать историю заново. VetSvet соединяет заботу, понятные решения и память о жизни питомца — без тревоги и лишнего шума.</aside>
+        </div>
+      </section>
+      <section class="route-section shell" id="care" aria-labelledby="care-title">
+        <div class="section-kicker"><span id="care-title">Начнём с того, что нужно сейчас</span><span>01 — 04</span></div>
+        <div class="route-grid reveal">
+          <a class="route-card" href="#approach"><span class="route-number">01</span><span class="route-icon" aria-hidden="true">✦</span><h3>Хочу позаботиться заранее</h3><p>Осмотр, профилактика и спокойный план заботы.</p><span class="arrow" aria-hidden="true">↗</span></a>
+          <a class="route-card" href="#approach"><span class="route-number">02</span><span class="route-icon" aria-hidden="true">◌</span><h3>Нужен уход и груминг</h3><p>Красота, комфорт и история того, что действительно подошло.</p><span class="arrow" aria-hidden="true">↗</span></a>
+          <a class="route-card" href="#emergency"><span class="route-number">03</span><span class="route-icon" aria-hidden="true">!</span><h3>Питомцу не очень хорошо</h3><p>Выберем безопасный следующий шаг — без лишних форм.</p><span class="arrow" aria-hidden="true">↗</span></a>
+          <a class="route-card" href="#approach"><span class="route-number">04</span><span class="route-icon" aria-hidden="true">→</span><h3>Нужен совет специалиста</h3><p>Структурированный запрос и профессиональный ответ.</p><span class="arrow" aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+      <section class="experience" id="approach" aria-labelledby="experience-title">
+        <div class="shell">
+          <p class="eyebrow">Не «заявка принята». Настоящий контакт.</p>
+          <h2 class="experience-heading reveal" id="experience-title">Вы знаете,<br><i>что происходит.</i></h2>
+          <div class="story-grid">
+            <article class="story-copy reveal"><p>У питомца есть своя история: что помогало, чего он боится, к кому привык, когда пришло время вернуться.</p><b>Мы не теряем её между визитами.</b></article>
+            <figure class="story-photo reveal"><img src="../../Photo/собака в прихожей (1).png" alt="Собака в зоне ожидания современной ветеринарной клиники" /><figcaption class="photo-label">знакомство</figcaption></figure>
+            <div class="status-stack reveal" aria-label="Пример понятных статусов для владельца">
+              <article class="status"><small>Сейчас</small><h3>Питомец в заботливых руках</h3><p>Команда начала приём. Следующее обновление — после осмотра.</p></article>
+              <article class="status"><small>Дальше</small><h3>Решение объяснят до действия</h3><p>Никаких неожиданных шагов, цены или молчания.</p></article>
+              <article class="status"><small>После</small><h3>Всё важное останется с вами</h3><p>Рекомендации, документы и понятный Care Plan — в истории питомца.</p></article>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="trust shell" aria-labelledby="trust-title">
+        <div class="trust-grid">
+          <div class="trust-heading"><p class="eyebrow" style="color:var(--teal)">Доверие — это детали</p><h2 id="trust-title">Без ощущения, что вы одни.</h2><p>Технологии здесь не прячут человека. Они убирают хаос, повторы и ожидание в неизвестности.</p></div>
+          <div class="principles reveal">
+            <article class="principle"><span class="principle-number">01</span><h3>Понятно до оплаты</h3><p>Что входит, что получится и что можно изменить.</p></article>
+            <article class="principle"><span class="principle-number">02</span><h3>Статус вместо тишины</h3><p>Вы видите текущий этап и понимаете, когда нужен ваш ответ.</p></article>
+            <article class="principle"><span class="principle-number">03</span><h3>Память без повторов</h3><p>История питомца помогает команде, а не заставляет вас всё пересказывать.</p></article>
+            <article class="principle"><span class="principle-number">04</span><h3>Человек в ответе</h3><p>Помощь и решения не прячутся за ботом или расплывчатым обещанием.</p></article>
+          </div>
+        </div>
+      </section>
+      <section class="emergency shell" id="emergency" aria-labelledby="emergency-title">
+        <div class="emergency-card reveal">
+          <div><p class="eyebrow" style="color:white">Если ситуация срочная</p><h2 id="emergency-title">Не нужно разбираться в меню.</h2><p>Срочный маршрут должен быть коротким, заметным и без маркетинга. Контакты, режим работы и клинический алгоритм будут подключены после подтверждения вашей реальной операционной модели.</p></div>
+          <a class="button" href="tel:+70000000000">Нужна помощь сейчас <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+    </main>
+    <footer><div class="footer-inner shell"><a class="brand" href="#top"><span class="brand-mark">*</span>ВЕТ<span>СВЕТ</span></a><span>Первая визуальная поверхность VetSvet · контент и контакты подключаются из подтверждённых данных</span></div></footer>
+    <script>
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const pageProgress = document.querySelector('.scroll-progress');
+      const updatePageProgress = () => {
+        const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+        pageProgress.style.transform = `scaleX(${scrollable > 0 ? window.scrollY / scrollable : 0})`;
+      };
+      updatePageProgress();
+      window.addEventListener('scroll', updatePageProgress, { passive: true });
+      const revealObserver = new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add('is-visible'); revealObserver.unobserve(entry.target); } }), { threshold: .14 });
+      document.querySelectorAll('.reveal').forEach((item) => revealObserver.observe(item));
+      document.querySelectorAll('.words').forEach((container) => {
+        const words = container.textContent.trim().split(/\s+/); container.textContent = '';
+        words.forEach((word, index) => { const span = document.createElement('span'); span.className = 'word'; span.style.transitionDelay = `${Math.min(index * 38, 700)}ms`; span.textContent = `${word} `; container.append(span); });
+        const wordObserver = new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add('words-in'); wordObserver.unobserve(entry.target); } }), { threshold: .45 }); wordObserver.observe(container);
+      });
+      if (!reduceMotion) {
+        const heroImage = document.querySelector('.hero-image');
+        const appPlane = document.querySelector('.app-plane');
+        const hero = document.querySelector('.hero');
+        hero.addEventListener('pointermove', (event) => { const x = (event.clientX / window.innerWidth - .5) * 10; const y = (event.clientY / window.innerHeight - .5) * -7; appPlane.style.transform = `rotateY(${x}deg) rotateX(${y}deg)`; });
+        hero.addEventListener('pointerleave', () => { appPlane.style.transform = ''; });
+        document.querySelectorAll('.route-card').forEach((card) => {
+          card.addEventListener('pointermove', (event) => { const box = card.getBoundingClientRect(); const x = (event.clientX - box.left) / box.width - .5; const y = (event.clientY - box.top) / box.height - .5; card.style.transform = `perspective(800px) rotateX(${y * -5}deg) rotateY(${x * 7}deg) translateY(-8px)`; });
+          card.addEventListener('pointerleave', () => { card.style.transform = ''; });
+        });
+        let ticking = false;
+        window.addEventListener('scroll', () => { if (!ticking) { window.requestAnimationFrame(() => { const progress = Math.min(window.scrollY / window.innerHeight, 1); heroImage.style.transform = `scale(${1.04 + progress * .06}) translate3d(0, ${progress * 7}%, 0)`; ticking = false; }); ticking = true; } }, { passive: true });
+      }
+    </script>
+  </body>
+</html>

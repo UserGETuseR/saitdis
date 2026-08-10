@@ -1,0 +1,10 @@
+{
+  "name": "VetSvet — забота о питомце",
+  "short_name": "VetSvet",
+  "start_url": "/client/",
+  "display": "standalone",
+  "background_color": "#f5f3ed",
+  "theme_color": "#07555a",
+  "lang": "ru",
+  "description": "Личный кабинет и история заботы о питомце в VetSvet."
+}

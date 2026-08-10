@@ -1,0 +1,24 @@
+import { randomUUID } from 'node:crypto';
+import { DomainError } from '../core/errors';
+import type { CommandMeta, ISODateTime, UUID } from '../core/types';
+import { iso } from '../core/types';
+import { AccessService } from '../identity/access-service';
+import { AuditOutbox } from '../platform/audit-outbox';
+
+export type PrintDocumentKind = 'LAB_LABEL' | 'CAGE_CARD' | 'PRESCRIPTION' | 'INVOICE' | 'CONSENT_COPY' | 'DISCHARGE' | 'VACCINATION' | 'INVENTORY_LABEL' | 'QR_LABEL';
+export type PrintTemplate = { id: UUID; organizationId: UUID; kind: PrintDocumentKind; version: number; body: string; state: 'DRAFT' | 'PUBLISHED' | 'RETIRED'; createdAt: ISODateTime; publishedAt?: ISODateTime };
+export type PrintJob = { id: UUID; organizationId: UUID; templateId: UUID; kind: PrintDocumentKind; payload: Record<string, string>; state: 'QUEUED' | 'SUBMITTED' | 'FAILED' | 'CANCELLED'; createdAt: ISODateTime; externalJobId?: string; failureReason?: string };
+export interface PrinterProvider { submit(job: { id: UUID; kind: PrintDocumentKind; content: string }): Promise<{ externalJobId: string }>; }
+/** Default adapter deliberately does not impersonate a printer; deployment must inject a real provider. */
+export class DeferredPrinterProvider implements PrinterProvider { async submit(): Promise<{ externalJobId: string }> { throw new Error('No PrinterProvider is configured.'); } }
+
+export class PrintService {
+  readonly templates = new Map<UUID, PrintTemplate>(); readonly jobs = new Map<UUID, PrintJob>();
+  constructor(private readonly journal: AuditOutbox, private readonly access: AccessService, private readonly provider: PrinterProvider = new DeferredPrinterProvider()) {}
+  createTemplate(input: { kind: PrintDocumentKind; body: string }, meta: CommandMeta): PrintTemplate { this.access.require(meta.actor, 'organization:manage'); if (!input.body.trim()) throw new DomainError('VALIDATION', 'A printable template body is required.'); const version = Math.max(0, ...[...this.templates.values()].filter((item) => item.organizationId === meta.actor.organizationId && item.kind === input.kind).map((item) => item.version)) + 1; const now = meta.now ?? new Date(); const template: PrintTemplate = { id: randomUUID(), organizationId: meta.actor.organizationId, kind: input.kind, version, body: input.body.trim(), state: 'DRAFT', createdAt: iso(now) }; this.templates.set(template.id, template); this.record(meta, 'print_template.created', 'PrintTemplate', template.id, { kind: template.kind, version }); return template; }
+  publishTemplate(templateId: UUID, meta: CommandMeta): PrintTemplate { this.access.require(meta.actor, 'organization:manage'); const template = this.getTemplate(templateId, meta.actor.organizationId); if (template.state !== 'DRAFT') throw new DomainError('CONFLICT', 'Only a draft print template can be published.'); const now = meta.now ?? new Date(); template.state = 'PUBLISHED'; template.publishedAt = iso(now); this.record(meta, 'print_template.published', 'PrintTemplate', template.id, { version: template.version }, now); return template; }
+  async request(input: { templateId: UUID; payload: Record<string, string> }, meta: CommandMeta): Promise<PrintJob> { this.access.require(meta.actor, 'clinical:read'); const template = this.getTemplate(input.templateId, meta.actor.organizationId); if (template.state !== 'PUBLISHED' || Object.values(input.payload).some((value) => typeof value !== 'string')) throw new DomainError('CONFLICT', 'A published template and string print payload are required.'); const now = meta.now ?? new Date(); const job: PrintJob = { id: randomUUID(), organizationId: meta.actor.organizationId, templateId: template.id, kind: template.kind, payload: { ...input.payload }, state: 'QUEUED', createdAt: iso(now) }; this.jobs.set(job.id, job); const content = template.body.replace(/{{([a-zA-Z0-9_]+)}}/g, (_, key: string) => input.payload[key] ?? ''); try { const result = await this.provider.submit({ id: job.id, kind: job.kind, content }); job.state = 'SUBMITTED'; job.externalJobId = result.externalJobId; } catch (error) { job.failureReason = error instanceof Error ? error.message : 'Printer submission failed.'; }
+    this.record(meta, 'print_job.requested', 'PrintJob', job.id, { kind: job.kind, state: job.state }, now); return job; }
+  private getTemplate(templateId: UUID, organizationId: UUID): PrintTemplate { const template = this.templates.get(templateId); if (!template || template.organizationId !== organizationId) throw new DomainError('NOT_FOUND', 'Print template is not available in this organization.'); return template; }
+  private record(meta: CommandMeta, action: string, aggregateType: string, aggregateId: UUID, metadata: Record<string, unknown>, now = meta.now ?? new Date()): void { this.journal.record(meta, { action, aggregateType, aggregateId, metadata }, { eventName: action, aggregateType, aggregateId, payload: {} }, now); }
+}

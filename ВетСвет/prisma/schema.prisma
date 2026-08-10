@@ -1,0 +1,722 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id          String   @id @default(uuid())
+  legalName   String
+  displayName String
+  createdAt   DateTime @default(now())
+  locations   Location[]
+  memberships StaffMembership[]
+  owners      Owner[]
+  pets        Pet[]
+  audits      AuditEvent[]
+  outbox      OutboxEvent[]
+  surgicalCases SurgicalCase[]
+  anesthesiaRecords AnesthesiaRecord[]
+  dentalCharts DentalChart[]
+  equipment Equipment[]
+  physicalIdentities PhysicalIdentity[]
+  labOrders LabOrder[]
+  specimens Specimen[]
+  suppliers Supplier[]
+  purchaseOrders PurchaseOrder[]
+  printTemplates PrintTemplate[]
+  printJobs PrintJob[]
+  checklistTemplates ChecklistTemplate[]
+  checklistRuns ChecklistRun[]
+  staffProfiles StaffProfile[]
+  credentials Credential[]
+  prechecks Precheck[]
+}
+
+model Location {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  timezone       String
+  active         Boolean      @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@index([organizationId])
+  equipment      Equipment[]
+}
+
+model UserIdentity {
+  id             String            @id @default(uuid())
+  phone          String?           @unique
+  email          String?           @unique
+  telegramUserId String?           @unique
+  createdAt      DateTime          @default(now())
+  memberships    StaffMembership[]
+  sessions       AuthSession[]
+}
+
+model AuthOtpChallenge {
+  id         String   @id @default(uuid())
+  identity   String
+  purpose    String
+  codeHash   String
+  attempts   Int      @default(0)
+  state      String   @default("PENDING")
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  @@index([identity, state, expiresAt])
+}
+
+model AuthSession {
+  id          String       @id @default(uuid())
+  userId      String
+  tokenHash   String       @unique
+  deviceLabel String?
+  state       String       @default("ACTIVE")
+  createdAt   DateTime     @default(now())
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        UserIdentity @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId, state, expiresAt])
+}
+
+model StaffMembership {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           String
+  state          String       @default("ACTIVE")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           UserIdentity @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, userId])
+  @@index([organizationId, role])
+}
+
+model Owner {
+  id             String       @id @default(uuid())
+  organizationId String
+  fullName       String
+  phone          String?
+  email          String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  relations      OwnerPetRelation[]
+  invoices       Invoice[]
+  consents       Consent[]
+  surgicalCases  SurgicalCase[]
+  dentalCharts   DentalChart[]
+  @@index([organizationId, phone])
+}
+
+model Pet {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  species        String
+  lifecycle      String       @default("ACTIVE")
+  medicalAlerts  Json?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  relations      OwnerPetRelation[]
+  cases          ClinicalCase[]
+  surgicalCases  SurgicalCase[]
+  dentalCharts   DentalChart[]
+  labOrders      LabOrder[]
+  specimens      Specimen[]
+  @@index([organizationId, name])
+}
+
+model OwnerPetRelation {
+  id             String @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  relation       String
+  primary        Boolean @default(false)
+  owner          Owner  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet    @relation(fields: [petId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, ownerId, petId])
+}
+
+model Service {
+  id             String @id @default(uuid())
+  organizationId String
+  publicName     String
+  internalName   String
+  kind           String
+  onlineBookable Boolean @default(true)
+  variants       ServiceVariant[]
+  @@index([organizationId, kind])
+}
+
+model ServiceVariant {
+  id                  String @id @default(uuid())
+  organizationId      String
+  serviceId           String
+  name                String
+  durationMinutes     Int
+  bufferBeforeMinutes Int    @default(0)
+  bufferAfterMinutes  Int    @default(0)
+  priceMinor          Int
+  depositMinor        Int    @default(0)
+  currency            String @default("RUB")
+  allowedSpecies      Json
+  service             Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  @@index([organizationId, serviceId])
+}
+
+model Appointment {
+  id             String   @id @default(uuid())
+  organizationId String
+  locationId     String
+  ownerId        String
+  petId          String
+  variantId      String
+  staffId        String
+  startsAt       DateTime
+  endsAt         DateTime
+  state          String
+  createdAt      DateTime @default(now())
+  @@index([organizationId, staffId, startsAt])
+  @@index([organizationId, petId, startsAt])
+}
+
+model Invoice {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String
+  appointmentId  String?  @unique
+  state          String
+  totalMinor     Int
+  paidMinor      Int      @default(0)
+  currency       String   @default("RUB")
+  createdAt      DateTime @default(now())
+  owner          Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  payments       Payment[]
+  @@index([organizationId, ownerId])
+}
+
+model Payment {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  invoiceId             String
+  provider              String
+  providerTransactionId String
+  amountMinor           Int
+  currency              String
+  state                 String
+  createdAt             DateTime @default(now())
+  invoice               Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, provider, providerTransactionId])
+}
+
+model ClinicalCase {
+  id             String      @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  status         String
+  reason         String
+  openedAt       DateTime    @default(now())
+  pet            Pet         @relation(fields: [petId], references: [id], onDelete: Restrict)
+  encounters     Encounter[]
+  @@index([organizationId, petId, openedAt])
+}
+
+model Encounter {
+  id             String       @id @default(uuid())
+  organizationId String
+  caseId         String
+  petId          String
+  version        Int
+  state          String
+  subjective     String?
+  objective      String?
+  assessment     String?
+  plan           String?
+  clinicianId    String
+  finalizedAt    DateTime?
+  amendmentOfId  String?
+  clinicalCase   ClinicalCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  prescriptions  Prescription[]
+  @@unique([caseId, version])
+  @@index([organizationId, petId])
+}
+
+model Prescription {
+  id             String    @id @default(uuid())
+  organizationId String
+  encounterId    String
+  medicationName String
+  instructions   String
+  state          String
+  prescriberId   String
+  encounter      Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  @@index([organizationId, encounterId])
+}
+
+model Consent {
+  id              String   @id @default(uuid())
+  organizationId  String
+  ownerId         String
+  petId           String?
+  documentVersion String
+  purpose         String
+  state           String
+  signedAt        DateTime
+  revokedAt       DateTime?
+  owner           Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  @@index([organizationId, ownerId])
+}
+
+model CarePlan {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  title          String
+  state          String
+  createdAt      DateTime @default(now())
+  tasks          CarePlanTask[]
+  @@index([organizationId, petId])
+}
+
+model CarePlanTask {
+  id             String   @id @default(uuid())
+  carePlanId     String
+  organizationId String
+  title          String
+  category       String
+  dueAt          DateTime?
+  state          String
+  completedAt    DateTime?
+  carePlan       CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Restrict)
+  @@index([organizationId, dueAt, state])
+}
+
+model PassportShare {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  token          String   @unique
+  scope          String
+  state          String
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  @@index([organizationId, petId, state])
+}
+
+model PrivacyRequest {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String
+  type           String
+  state          String
+  requestedAt    DateTime @default(now())
+  completedAt    DateTime?
+  @@index([organizationId, ownerId, state])
+}
+
+model KnowledgeArticle {
+  id             String   @id @default(uuid())
+  organizationId String
+  title          String
+  slug           String
+  body           String
+  state          String
+  reviewedBy     String?
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+  @@unique([organizationId, slug])
+}
+
+model ServicePackage {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  credits        Int
+  state          String
+  serviceIds     Json
+  createdAt      DateTime @default(now())
+  balances       PackageBalance[]
+  @@index([organizationId, state])
+}
+
+model PackageBalance {
+  id               String         @id @default(uuid())
+  organizationId   String
+  ownerId          String
+  petId            String?
+  packageId        String
+  remainingCredits Int
+  purchasedAt      DateTime       @default(now())
+  expiresAt        DateTime?
+  servicePackage   ServicePackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  @@index([organizationId, ownerId])
+}
+
+model LoyaltyLedgerEntry {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String
+  pointsDelta    Int
+  reason         String
+  createdAt      DateTime @default(now())
+  @@index([organizationId, ownerId, createdAt])
+}
+
+model OperationalTask {
+  id             String   @id @default(uuid())
+  organizationId String
+  title          String
+  priority       String
+  state          String
+  assigneeId     String?
+  relatedType    String?
+  relatedId      String?
+  createdAt      DateTime @default(now())
+  completedAt    DateTime?
+  @@index([organizationId, state, priority])
+}
+
+model Incident {
+  id             String   @id @default(uuid())
+  organizationId String
+  petId          String?
+  type           String
+  severity       String
+  description    String
+  state          String
+  createdAt      DateTime @default(now())
+  @@index([organizationId, state, severity])
+}
+
+model Hospitalization {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  state          String
+  admittedAt     DateTime @default(now())
+  dischargedAt   DateTime?
+  tasks          TreatmentTask[]
+  @@index([organizationId, petId, state])
+}
+
+model TreatmentTask {
+  id                String          @id @default(uuid())
+  hospitalizationId String
+  organizationId    String
+  title             String
+  scheduledAt       DateTime
+  state             String
+  administeredBy    String?
+  administeredAt    DateTime?
+  hospitalization   Hospitalization @relation(fields: [hospitalizationId], references: [id], onDelete: Restrict)
+  @@index([organizationId, scheduledAt, state])
+}
+
+model SurgicalCase {
+  id               String            @id @default(uuid())
+  organizationId   String
+  ownerId          String
+  petId            String
+  procedure        String
+  indication       String
+  surgeonId        String
+  teamIds          Json
+  room             String
+  scheduledAt      DateTime
+  state            String
+  consentRecorded  Boolean           @default(false)
+  fastingConfirmed Boolean           @default(false)
+  checklist        Json
+  operativeNote    String?
+  complicationNote String?
+  recoveryNote     String?
+  dischargedAt     DateTime?
+  createdAt        DateTime          @default(now())
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner            Owner             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet              Pet               @relation(fields: [petId], references: [id], onDelete: Restrict)
+  anesthesiaRecords AnesthesiaRecord[]
+  @@index([organizationId, state, scheduledAt])
+  @@index([organizationId, petId, scheduledAt])
+}
+
+model AnesthesiaRecord {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  surgicalCaseId     String
+  petId              String
+  responsibleStaffId String
+  state              String
+  preAssessment      String?
+  protocol           String?
+  airway             String?
+  medications        Json
+  vitals             Json
+  events             Json
+  createdAt          DateTime     @default(now())
+  closedAt           DateTime?
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  surgicalCase       SurgicalCase @relation(fields: [surgicalCaseId], references: [id], onDelete: Restrict)
+  @@index([organizationId, surgicalCaseId])
+  @@index([organizationId, petId, state])
+}
+
+model DentalChart {
+  id            String       @id @default(uuid())
+  organizationId String
+  ownerId       String
+  petId         String
+  version       Int
+  state         String
+  findings      Json
+  procedures    Json
+  clinicianId   String
+  createdAt     DateTime     @default(now())
+  finalizedAt   DateTime?
+  amendmentOfId String?
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner         Owner        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet           Pet          @relation(fields: [petId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, petId, version])
+  @@index([organizationId, petId, state])
+}
+
+model Equipment {
+  id                String       @id @default(uuid())
+  organizationId    String
+  locationId        String
+  name              String
+  kind              String
+  serialNumber      String?
+  state             String
+  lastMaintenanceAt DateTime?
+  maintenanceNote   String?
+  createdAt         DateTime     @default(now())
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  location          Location     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, serialNumber])
+  @@index([organizationId, locationId, state])
+}
+
+model PhysicalIdentity {
+  id           String       @id @default(uuid())
+  organizationId String
+  targetType   String
+  targetId     String
+  opaqueToken  String       @unique
+  state        String
+  createdAt    DateTime     @default(now())
+  revokedAt    DateTime?
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, targetType, targetId])
+  @@index([organizationId, targetType, state])
+}
+
+model LabOrder {
+  id             String    @id @default(uuid())
+  organizationId String
+  petId          String
+  testName       String
+  state          String
+  orderedAt      DateTime  @default(now())
+  resultSummary  String?
+  createdBy      String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  pet            Pet       @relation(fields: [petId], references: [id], onDelete: Restrict)
+  specimens      Specimen[]
+  @@index([organizationId, petId, orderedAt])
+}
+
+model Specimen {
+  id                String    @id @default(uuid())
+  organizationId    String
+  orderId           String
+  petId             String
+  type              String
+  container         String
+  state             String
+  collectedBy       String
+  collectedAt       DateTime
+  location          String?
+  externalReference String?
+  receivedAt        DateTime?
+  rejectedReason    String?
+  resultLinkedAt    DateTime?
+  identityId        String    @unique
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  order             LabOrder  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  pet               Pet       @relation(fields: [petId], references: [id], onDelete: Restrict)
+  @@index([organizationId, orderId, state])
+}
+
+model Supplier {
+  id             String          @id @default(uuid())
+  organizationId String
+  name           String
+  contactEmail   String?
+  state          String
+  createdAt      DateTime        @default(now())
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  purchaseOrders PurchaseOrder[]
+  @@index([organizationId, state])
+}
+
+model PurchaseOrder {
+  id             String       @id @default(uuid())
+  organizationId String
+  supplierId     String
+  locationId     String
+  state          String
+  lines          Json
+  createdAt      DateTime     @default(now())
+  approvedAt     DateTime?
+  orderedAt      DateTime?
+  receivedAt     DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  supplier       Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  @@index([organizationId, locationId, state])
+  @@index([supplierId, state])
+}
+
+model PrintTemplate {
+  id             String       @id @default(uuid())
+  organizationId String
+  kind           String
+  version        Int
+  body           String
+  state          String
+  createdAt      DateTime     @default(now())
+  publishedAt    DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  jobs           PrintJob[]
+  @@unique([organizationId, kind, version])
+  @@index([organizationId, kind, state])
+}
+
+model PrintJob {
+  id             String       @id @default(uuid())
+  organizationId String
+  templateId     String
+  kind           String
+  payload        Json
+  state          String
+  createdAt      DateTime     @default(now())
+  externalJobId  String?
+  failureReason  String?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  template       PrintTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  @@index([organizationId, state, createdAt])
+}
+
+model ChecklistTemplate {
+  id             String       @id @default(uuid())
+  organizationId String
+  purpose        String
+  version        Int
+  state          String
+  steps          Json
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  runs           ChecklistRun[]
+  @@unique([organizationId, purpose, version])
+  @@index([organizationId, purpose, state])
+}
+
+model ChecklistRun {
+  id             String       @id @default(uuid())
+  organizationId String
+  templateId     String
+  targetType     String
+  targetId       String
+  state          String
+  steps          Json
+  signedOffBy    String?
+  signedOffAt    DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  template       ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  @@index([organizationId, targetType, targetId])
+  @@index([organizationId, state, createdAt])
+}
+
+model StaffProfile {
+  id              String       @id @default(uuid())
+  organizationId  String
+  userId          String
+  employmentState String
+  specialties     Json
+  locationIds     Json
+  createdAt       DateTime     @default(now())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, userId])
+  @@index([organizationId, employmentState])
+}
+
+model Credential {
+  id                      String       @id @default(uuid())
+  organizationId          String
+  userId                  String
+  competency              String
+  certificateNumber       String?
+  expiresAt               DateTime?
+  permittedProcedureCodes Json
+  state                   String
+  createdAt               DateTime     @default(now())
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@index([organizationId, userId, competency, state])
+  @@index([organizationId, expiresAt])
+}
+
+model Precheck {
+  id               String       @id @default(uuid())
+  organizationId   String
+  appointmentId    String
+  ownerId          String
+  petId            String
+  state            String
+  ownerNote        String?
+  arrivalConfirmed Boolean      @default(false)
+  submittedAt      DateTime?
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, appointmentId])
+  @@index([organizationId, petId, state])
+}
+
+model AuditEvent {
+  id             String       @id @default(uuid())
+  organizationId String
+  actorId        String
+  action         String
+  aggregateType  String
+  aggregateId    String
+  correlationId  String
+  metadata       Json
+  occurredAt     DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@index([organizationId, aggregateType, aggregateId])
+}
+
+model OutboxEvent {
+  id             String       @id @default(uuid())
+  organizationId String
+  eventName      String
+  aggregateType  String
+  aggregateId    String
+  idempotencyKey String
+  payload        Json
+  occurredAt     DateTime     @default(now())
+  publishedAt    DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, publishedAt])
+}

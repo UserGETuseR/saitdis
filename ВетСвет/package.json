@@ -1,0 +1,12 @@
+{
+  "name": "vetsvet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VetSvet — digital operating system for pet care.",
+  "scripts": {
+    "test:foundation": "..\\node_modules\\.bin\\tsx.cmd apps\\api\\tests\\foundation.spec.ts",
+    "test:persistence": "..\\node_modules\\.bin\\tsx.cmd apps\\api\\tests\\persistence-runtime.spec.ts",
+    "test:telegram": "..\\node_modules\\.bin\\tsx.cmd apps\\telegram-bot\\tests\\webhook.spec.ts",
+    "test:worker": "..\\node_modules\\.bin\\tsx.cmd apps\\worker\\tests\\outbox-worker.spec.ts"
+  }
+}

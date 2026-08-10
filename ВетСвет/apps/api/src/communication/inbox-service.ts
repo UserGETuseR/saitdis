@@ -1,0 +1,18 @@
+import { randomUUID } from 'node:crypto';
+import { DomainError } from '../core/errors';
+import type { CommandMeta, ISODateTime, UUID } from '../core/types';
+import { iso } from '../core/types';
+import { AccessService } from '../identity/access-service';
+import { AuditOutbox } from '../platform/audit-outbox';
+
+export type Conversation = { id: UUID; organizationId: UUID; ownerId?: UUID; petId?: UUID; channel: 'WEB' | 'TELEGRAM' | 'EMAIL' | 'PHONE'; state: 'OPEN' | 'PENDING_OWNER' | 'RESOLVED'; assigneeId?: UUID; createdAt: ISODateTime };
+export type Message = { id: UUID; conversationId: UUID; organizationId: UUID; direction: 'INBOUND' | 'OUTBOUND'; body: string; authorId?: UUID; createdAt: ISODateTime };
+export class InboxService {
+  readonly conversations = new Map<UUID, Conversation>(); readonly messages = new Map<UUID, Message>();
+  constructor(private readonly journal: AuditOutbox, private readonly access: AccessService) {}
+  open(input: { channel: Conversation['channel']; body: string; ownerId?: UUID; petId?: UUID }, meta: CommandMeta): Conversation { this.access.require(meta.actor, 'owner:write'); if (!input.body.trim()) throw new DomainError('VALIDATION', 'First message is required.'); const now = meta.now ?? new Date(); const conversation: Conversation = { id: randomUUID(), organizationId: meta.actor.organizationId, ownerId: input.ownerId, petId: input.petId, channel: input.channel, state: 'OPEN', createdAt: iso(now) }; this.conversations.set(conversation.id, conversation); this.addMessage(conversation.id, { direction: 'INBOUND', body: input.body }, meta); return conversation; }
+  reply(conversationId: UUID, body: string, meta: CommandMeta): Message { this.access.require(meta.actor, 'owner:write'); const conversation = this.get(conversationId, meta.actor.organizationId); if (conversation.state === 'RESOLVED' || !body.trim()) throw new DomainError('CONFLICT', 'Resolved conversation cannot receive an empty reply.'); const message = this.addMessage(conversationId, { direction: 'OUTBOUND', body }, meta); conversation.state = 'PENDING_OWNER'; conversation.assigneeId = meta.actor.userId; return message; }
+  resolve(conversationId: UUID, meta: CommandMeta): Conversation { this.access.require(meta.actor, 'owner:write'); const conversation = this.get(conversationId, meta.actor.organizationId); if (conversation.state === 'RESOLVED') throw new DomainError('CONFLICT', 'Conversation was already resolved.'); conversation.state = 'RESOLVED'; return conversation; }
+  private addMessage(conversationId: UUID, input: { direction: Message['direction']; body: string }, meta: CommandMeta): Message { const conversation = this.get(conversationId, meta.actor.organizationId); const now = meta.now ?? new Date(); const message: Message = { id: randomUUID(), conversationId, organizationId: conversation.organizationId, direction: input.direction, body: input.body.trim(), authorId: input.direction === 'OUTBOUND' ? meta.actor.userId : undefined, createdAt: iso(now) }; this.messages.set(message.id, message); this.journal.record(meta, { action: `message.${input.direction.toLowerCase()}`, aggregateType: 'Conversation', aggregateId: conversationId, metadata: { channel: conversation.channel } }, { eventName: `message.${input.direction.toLowerCase()}`, aggregateType: 'Conversation', aggregateId: conversationId, payload: { petId: conversation.petId } }, now); return message; }
+  private get(id: UUID, organizationId: UUID): Conversation { const conversation = this.conversations.get(id); if (!conversation || conversation.organizationId !== organizationId) throw new DomainError('NOT_FOUND', 'Conversation is not available.'); return conversation; }
+}

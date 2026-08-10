@@ -1,0 +1,11 @@
+# Local credentials and machine state
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.next/
+coverage/
+
+# Local uploads must never be committed
+storage/
