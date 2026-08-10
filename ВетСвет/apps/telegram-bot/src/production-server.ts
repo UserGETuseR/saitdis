@@ -22,7 +22,6 @@ const config = {
   webhookSecret: required('TELEGRAM_WEBHOOK_SECRET'),
   botUsername: required('TELEGRAM_BOT_USERNAME').replace('@', ''),
   publicUrl: required('PUBLIC_URL').replace(/\/$/, ''),
-  adminSetupSecret: required('VETSVET_ADMIN_SETUP_SECRET'),
   organizationId: process.env.VETSVET_ORGANIZATION_ID?.trim() || 'vetsvet-production',
   sbpPhone: required('VETSVET_SBP_PHONE'),
   port: Number(process.env.PORT ?? 4400)
@@ -149,9 +148,19 @@ async function handleUpdate(update: TgUpdate) {
     return;
   }
   const claim = text.match(/^\/admin\s+(.+)$/);
-  if (claim && sameSecret(claim[1], config.adminSetupSecret)) {
-    await db.telegramAdminChat.upsert({ where: { singletonKey: `admin:${telegramUserId}` }, update: { chatId, telegramUserId }, create: { singletonKey: `admin:${telegramUserId}`, chatId, telegramUserId } });
-    await say(chatId, 'Вы подключены как администратор VetSvet. Ваш доступ не заменит другого администратора: заявки, чеки и приглашения будут приходить каждому из вас.');
+  if (claim) {
+    const enrollment = await db.adminEnrollment.findUnique({ where: { tokenHash: digest(claim[1]) } });
+    if (!enrollment || enrollment.state !== 'PENDING' || enrollment.expiresAt <= new Date()) { await say(chatId, 'Этот код администратора недействителен, уже использован или истёк.'); return; }
+    const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
+    await db.$transaction([
+      db.adminEnrollment.update({ where: { id: enrollment.id }, data: { state: 'CONSUMED', consumedAt: new Date(), telegramUserId } }),
+      db.telegramAdminChat.upsert({ where: { singletonKey: `admin:${telegramUserId}` }, update: { chatId, telegramUserId }, create: { singletonKey: `admin:${telegramUserId}`, chatId, telegramUserId } }),
+      db.staffMembership.upsert({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } }, update: { role: 'ADMIN', state: 'ACTIVE' }, create: { organizationId: config.organizationId, userId: user.id, role: 'ADMIN', state: 'ACTIVE' } }),
+      db.staffProfile.upsert({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } }, update: { employmentState: 'ACTIVE' }, create: { organizationId: config.organizationId, userId: user.id, employmentState: 'ACTIVE', specialties: [], locationIds: [] } })
+    ]);
+    const secret = randomBytes(16).toString('base64url');
+    const invite = await db.staffInvite.create({ data: { organizationId: config.organizationId, tokenHash: digest(secret), fullName, role: 'ADMIN', expiresAt: new Date(Date.now() + 7 * 86400000) } });
+    await say(chatId, `Вы подключены как администратор VetSvet. Ваш доступ не заменит другого администратора: заявки, чеки и приглашения будут приходить каждому из вас.\n\nЛичная ссылка в рабочее пространство (действует 7 дней):\n${config.publicUrl}/auth/?mode=staff&invite=${invite.id}.${secret}`);
     return;
   }
   const inviteCommand = text.match(/^\/invite\s+(ADMIN|MANAGER|VETERINARIAN|GROOMER|ASSISTANT|RECEPTIONIST)(?:\s+(.+))?$/i);

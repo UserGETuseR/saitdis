@@ -122,6 +122,18 @@ model TelegramAdminChat {
   createdAt      DateTime @default(now())
 }
 
+model AdminEnrollment {
+  id             String   @id @default(uuid())
+  tokenHash      String   @unique
+  label          String
+  state          String   @default("PENDING")
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  telegramUserId String?
+  createdAt      DateTime @default(now())
+  @@index([state, expiresAt])
+}
+
 model TelegramRequest {
   id             String   @id @default(uuid())
   telegramUserId String
