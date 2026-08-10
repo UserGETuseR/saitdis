@@ -1,0 +1,11 @@
+server {
+    listen 80;
+    server_name mne.occochi.ru;
+
+    root /var/www/mne-mojno-site/mne-mojno-site;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
