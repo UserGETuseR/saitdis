@@ -82,6 +82,58 @@ model AuthSession {
   @@index([userId, state, expiresAt])
 }
 
+model TelegramLoginRequest {
+  id             String   @id @default(uuid())
+  tokenHash      String   @unique
+  state          String   @default("PENDING")
+  telegramUserId String?
+  chatId         String?
+  expiresAt      DateTime
+  confirmedAt    DateTime?
+  consumedAt     DateTime?
+  createdAt      DateTime @default(now())
+  @@index([state, expiresAt])
+  @@index([telegramUserId])
+}
+
+model TelegramAdminChat {
+  id             String   @id @default(uuid())
+  singletonKey   String   @unique
+  chatId         String   @unique
+  telegramUserId String   @unique
+  createdAt      DateTime @default(now())
+}
+
+model TelegramRequest {
+  id             String   @id @default(uuid())
+  telegramUserId String
+  chatId         String
+  kind           String
+  message        String
+  state          String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  paymentProof   TelegramPaymentProof?
+  @@index([telegramUserId, state, createdAt])
+}
+
+model TelegramPaymentProof {
+  id              String   @id @default(uuid())
+  requestId       String?  @unique
+  telegramUserId  String
+  chatId          String
+  sourceMessageId Int
+  purpose         String
+  state           String   @default("PENDING_REVIEW")
+  reviewedByChatId String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  createdAt       DateTime @default(now())
+  request         TelegramRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  @@index([state, createdAt])
+  @@index([telegramUserId, chatId])
+}
+
 model StaffMembership {
   id             String       @id @default(uuid())
   organizationId String
@@ -100,6 +152,7 @@ model Owner {
   fullName       String
   phone          String?
   email          String?
+  telegramUserId String?
   createdAt      DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   relations      OwnerPetRelation[]
@@ -108,6 +161,7 @@ model Owner {
   surgicalCases  SurgicalCase[]
   dentalCharts   DentalChart[]
   @@index([organizationId, phone])
+  @@unique([organizationId, telegramUserId])
 }
 
 model Pet {
