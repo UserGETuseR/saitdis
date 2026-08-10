@@ -103,13 +103,19 @@ async function confirmTelegramLogin(recordId: string, secret: string, telegramUs
   const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
   if (record.mode === 'STAFF') {
     const invite = record.staffInviteId ? await db.staffInvite.findUnique({ where: { id: record.staffInviteId } }) : undefined;
-    if (!invite || invite.state !== 'PENDING' || invite.expiresAt <= new Date()) return false;
-    await db.$transaction([
-      db.staffInvite.update({ where: { id: invite.id }, data: { state: 'ACCEPTED', acceptedAt: new Date(), acceptedByUserId: user.id } }),
-      db.staffMembership.upsert({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } }, update: { role: invite.role, state: 'ACTIVE' }, create: { organizationId: config.organizationId, userId: user.id, role: invite.role, state: 'ACTIVE' } }),
-      db.staffProfile.upsert({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } }, update: { employmentState: 'ACTIVE' }, create: { organizationId: config.organizationId, userId: user.id, employmentState: 'ACTIVE', specialties: [], locationIds: [] } }),
-      db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } })
-    ]);
+    if (record.staffInviteId) {
+      if (!invite || invite.state !== 'PENDING' || invite.expiresAt <= new Date()) return false;
+      await db.$transaction([
+        db.staffInvite.update({ where: { id: invite.id }, data: { state: 'ACCEPTED', acceptedAt: new Date(), acceptedByUserId: user.id } }),
+        db.staffMembership.upsert({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } }, update: { role: invite.role, state: 'ACTIVE' }, create: { organizationId: config.organizationId, userId: user.id, role: invite.role, state: 'ACTIVE' } }),
+        db.staffProfile.upsert({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } }, update: { employmentState: 'ACTIVE' }, create: { organizationId: config.organizationId, userId: user.id, employmentState: 'ACTIVE', specialties: [], locationIds: [] } }),
+        db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } })
+      ]);
+    } else {
+      const membership = await db.staffMembership.findUnique({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } } });
+      if (!membership || membership.state !== 'ACTIVE') { await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'REJECTED' } }); return false; }
+      await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } });
+    }
   } else {
     await ownerFor(telegramUserId, fullName);
     await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } });
@@ -210,9 +216,11 @@ async function startTelegramLogin(request: IncomingMessage, response: ServerResp
   let staffInviteId: string | undefined;
   if (mode === 'STAFF') {
     const parsed = parseInvite(input.invite);
-    const invite = parsed ? await db.staffInvite.findUnique({ where: { id: parsed.id } }) : undefined;
-    if (!parsed || !invite || invite.state !== 'PENDING' || invite.expiresAt <= new Date() || !sameSecret(invite.tokenHash, digest(parsed.token))) { json(response, 403, { error: 'INVITE_REQUIRED' }); return; }
-    staffInviteId = invite.id;
+    if (input.invite) {
+      const invite = parsed ? await db.staffInvite.findUnique({ where: { id: parsed.id } }) : undefined;
+      if (!parsed || !invite || invite.state !== 'PENDING' || invite.expiresAt <= new Date() || !sameSecret(invite.tokenHash, digest(parsed.token))) { json(response, 403, { error: 'INVITE_REQUIRED' }); return; }
+      staffInviteId = invite.id;
+    }
   }
   const secret = randomBytes(16).toString('base64url');
   const expiresAt = new Date(Date.now() + 600000);
