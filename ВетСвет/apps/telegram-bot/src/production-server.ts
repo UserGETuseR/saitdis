@@ -89,6 +89,10 @@ async function ownerFor(telegramUserId: string, fullName: string) {
 async function adminFor(chatId: string, telegramUserId: string) {
   return db.telegramAdminChat.findFirst({ where: { chatId, telegramUserId } });
 }
+async function adminChats() {
+  const records = await db.telegramAdminChat.findMany({ orderBy: { createdAt: 'asc' } });
+  return [...new Map(records.map((record) => [record.chatId, record])).values()];
+}
 function parseInvite(value: unknown) {
   const [id, token, extra] = String(value ?? '').split('.');
   return !extra && /^[0-9a-f-]{36}$/i.test(id ?? '') && /^[A-Za-z0-9_-]{16,}$/i.test(token ?? '') ? { id, token } : undefined;
@@ -146,8 +150,8 @@ async function handleUpdate(update: TgUpdate) {
   }
   const claim = text.match(/^\/admin\s+(.+)$/);
   if (claim && sameSecret(claim[1], config.adminSetupSecret)) {
-    await db.telegramAdminChat.upsert({ where: { singletonKey: 'primary' }, update: { chatId, telegramUserId }, create: { singletonKey: 'primary', chatId, telegramUserId } });
-    await say(chatId, 'Администратор VetSvet подключён. Сюда будут приходить заявки, чеки и создание приглашений сотрудникам.');
+    await db.telegramAdminChat.upsert({ where: { singletonKey: `admin:${telegramUserId}` }, update: { chatId, telegramUserId }, create: { singletonKey: `admin:${telegramUserId}`, chatId, telegramUserId } });
+    await say(chatId, 'Вы подключены как администратор VetSvet. Ваш доступ не заменит другого администратора: заявки, чеки и приглашения будут приходить каждому из вас.');
     return;
   }
   const inviteCommand = text.match(/^\/invite\s+(ADMIN|MANAGER|VETERINARIAN|GROOMER|ASSISTANT|RECEPTIONIST)(?:\s+(.+))?$/i);
@@ -166,8 +170,8 @@ async function handleUpdate(update: TgUpdate) {
   }
   if (text.startsWith('/booking')) {
     const request = await db.telegramRequest.create({ data: { telegramUserId, chatId, kind: 'APPOINTMENT', message: text.slice(8).trim() || 'Хочу записаться', state: 'NEW' } });
-    const admin = await db.telegramAdminChat.findFirst({ where: { singletonKey: 'primary' } });
-    if (admin) await say(admin.chatId, `Новая заявка на запись #${request.id.slice(0, 8)}\n${request.message}`);
+    const admins = await adminChats();
+    await Promise.all(admins.map((admin) => say(admin.chatId, `Новая заявка на запись #${request.id.slice(0, 8)}\n${request.message}`)));
     await say(chatId, 'Заявка на запись принята. Команда уточнит свободное время и подтвердит её здесь.');
     return;
   }
@@ -181,11 +185,11 @@ async function handleUpdate(update: TgUpdate) {
   if (message.photo?.length) {
     const request = await db.telegramRequest.findFirst({ where: { telegramUserId, state: 'WAITING_PAYMENT' }, orderBy: { createdAt: 'desc' } });
     const proof = await db.telegramPaymentProof.create({ data: { requestId: request?.id, telegramUserId, chatId, sourceMessageId: message.message_id, purpose: request ? 'CONSULTATION' : 'APPOINTMENT', state: 'PENDING_REVIEW' } });
-    const admin = await db.telegramAdminChat.findFirst({ where: { singletonKey: 'primary' } });
-    if (admin) {
-      await telegram('forwardMessage', { chat_id: admin.chatId, from_chat_id: chatId, message_id: message.message_id });
-      await say(admin.chatId, `Чек #${proof.id.slice(0, 8)} — подтвердить перевод?`, [[{ text: '✓ Подтвердить', callback_data: `payment:approve:${proof.id}` }, { text: '✕ Отклонить', callback_data: `payment:reject:${proof.id}` }]]);
-    }
+    const admins = await adminChats();
+    await Promise.all(admins.flatMap((admin) => [
+      telegram('forwardMessage', { chat_id: admin.chatId, from_chat_id: chatId, message_id: message.message_id }),
+      say(admin.chatId, `Чек #${proof.id.slice(0, 8)} — подтвердить перевод?`, [[{ text: '✓ Подтвердить', callback_data: `payment:approve:${proof.id}` }, { text: '✕ Отклонить', callback_data: `payment:reject:${proof.id}` }]])
+    ]));
     await say(chatId, 'Чек получен и отправлен администратору на проверку.');
   }
 }
