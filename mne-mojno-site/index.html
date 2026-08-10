@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>«Мне можно» — студия наращивания волос в Москве</title>
+  <meta name="description" content="Студия наращивания волос «Мне можно» в Москве. Наращивание, коррекция, окрашивание и точный подбор оттенка. Команда мастеров и предварительная запись." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,700;0,800;0,900;1,700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css?v=19" />
+</head>
+<body>
+
+  <div class="cursor-glow" id="cursorGlow" aria-hidden="true"></div>
+  <div class="vprogress" id="vprogress" aria-hidden="true"><span id="vprogressBar"></span></div>
+
+  <!-- ============ НАВИГАЦИЯ ============ -->
+  <header class="navbar" id="navbar">
+    <div class="container nav-inner">
+      <a href="#hero" class="logo" aria-label="Мне можно — на главную">
+        <span class="logo-mark">MM</span>
+        <span class="logo-text"><strong>Мне можно</strong><small>Hair studio · Moscow</small></span>
+      </a>
+      <span class="nav-status"><i></i>Только по записи</span>
+      <nav class="nav-links" id="navLinks" aria-label="Основная навигация">
+        <a href="#story" data-nav-index="01">Студия</a>
+        <a href="#services" data-nav-index="02">Услуги</a>
+        <a href="https://leto-hair-ulitsa-borisovskie-prudy.clients.site/" data-nav-index="03" target="_blank" rel="noopener">Цены</a>
+        <a href="#works" data-nav-index="04">Работы</a>
+        <a href="#reviews" data-nav-index="05">Отзывы</a>
+        <a href="#faq" data-nav-index="06">Вопросы</a>
+        <a href="#contacts" data-nav-index="07">Контакты</a>
+      </nav>
+      <a href="https://yandex.ru/maps/org/mne_mozhno/11885232271/?booking%5Bpage%5D=menu&booking%5Bpermalink%5D=11885232271&ll=37.739608%2C55.633760&z=16" class="nav-cta" target="_blank" rel="noopener">Запись <span aria-hidden="true">↗</span></a>
+      <button class="burger" id="burger" aria-label="Открыть меню" aria-expanded="false" aria-controls="navLinks">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <main id="page">
+
+    <!-- 01 · HERO — меняющийся крупный заголовок + видео-скраб -->
+    <section class="hero" id="hero" data-hero>
+      <div class="hero-stage" id="heroStage">
+        <video class="hero-video" id="heroVideo" muted loop autoplay playsinline preload="auto"
+               poster="images/2534b5c2744df8b71b702336d4371c96.jpg">
+          <source src="video/hero.mp4" type="video/mp4" />
+          <source src="video/hero.webm" type="video/webm" />
+        </video>
+        <div class="hero-scrim" aria-hidden="true"></div>
+        <div class="hero-grain" aria-hidden="true"></div>
+
+        <!-- Кинематографическая глубина: реальные кадры сцены собираются по скроллу. -->
+        <div class="hero-scene" aria-hidden="true">
+          <div class="hero-scene-inner" id="heroSceneInner">
+            <span class="scene-orb scene-orb-a"></span>
+            <span class="scene-orb scene-orb-b"></span>
+            <span class="scene-orb scene-orb-c"></span>
+            <span class="scene-frame scene-frame-a"></span>
+            <span class="scene-frame scene-frame-b"></span>
+            <figure class="hero-card hero-card-a" data-hero-card>
+              <img src="images/15c7a4594a450cf651e2c6fa9a6c38d4.jpg" alt="" />
+            </figure>
+            <figure class="hero-card hero-card-b" data-hero-card>
+              <img src="images/1745ca208c2dfd1987f5da6be1cb8563.jpg" alt="" />
+            </figure>
+            <figure class="hero-card hero-card-c" data-hero-card>
+              <img src="images/2faccfbd7c16273f43c11c1f27cfb609.jpg" alt="" />
+            </figure>
+          </div>
+        </div>
+
+        <div class="hero-overlay">
+          <div class="container hero-content">
+            <span class="kicker">Москва · Борисовские Пруды · Команда студии</span>
+
+            <!-- Меняющийся крупный заголовок: строки сменяют друг друга при скролле -->
+            <h1 class="hero-morph" id="heroMorph" aria-label="Мне можно" data-scroll-type>
+              <span class="morph-word is-active" data-morph="0">Мне можно</span>
+              <span class="morph-word" data-morph="1">Быть собой</span>
+              <span class="morph-word" data-morph="2">Волосы как свои</span>
+              <span class="morph-word" data-morph="3">Доверять годами</span>
+            </h1>
+          </div>
+        </div>
+
+        <div class="hero-counter" id="heroCounter" aria-hidden="true"><span>01</span><i></i><span>04</span></div>
+        <div class="scroll-hint" id="scrollHint" aria-hidden="true">Листайте — смотрите историю ↓</div>
+      </div>
+    </section>
+
+    <!-- 02 · О СТУДИИ — большой лонгрид -->
+    <section class="section story scene-section" id="story">
+      <div class="container">
+        <div class="section-head">
+          <span class="index">01</span>
+          <span class="kicker">О студии</span>
+        </div>
+        <h2 class="section-title split-text">Мне можно</h2>
+
+        <div class="story-grid">
+          <div class="story-lead-col">
+            <p class="story-lead">«Мне&nbsp;можно» — это про разрешение себе быть красивой без компромиссов. Тихое пространство, где за длинными волосами стоит не конвейер, а человек.</p>
+          </div>
+          <div class="story-body">
+            <p>В студии работает команда мастеров с общим подходом: <strong>максимальная естественность и бережность</strong>. Мы не гонимся за длиной любой ценой и не создаём объём, который вредит своим волосам. Важен результат, который выглядит вашим — просто в лучшей версии.</p>
+            <p>Каждый визит начинается с разговора. Мастер оценивает структуру, оттенок, направление роста и ваш ритм жизни — и только потом предлагает волосы и метод. Мы используем <strong>незаметные маленькие капсулы</strong> и холодную технологию без нагрева, чтобы беречь собственную длину.</p>
+            <p>Здесь нет спешки. Команда планирует запись так, чтобы у вас было время на консультацию, работу и рекомендации по уходу. Поэтому к нам возвращаются <strong>годами</strong> — и приводят близких.</p>
+          </div>
+        </div>
+
+        <figure class="story-media reveal-media" data-reveal>
+          <div class="cover" aria-hidden="true"></div>
+          <img src="images/2faccfbd7c16273f43c11c1f27cfb609.jpg" alt="Работа команды студии наращивания волос «Мне можно»" loading="lazy" />
+        </figure>
+
+        <div class="story-values">
+          <div class="value"><span class="value-num">01</span><h3>Естественность</h3><p>Граница между вашими и наращёнными волосами исчезает — в движении, на свету и на ощупь.</p></div>
+          <div class="value"><span class="value-num">02</span><h3>Бережность</h3><p>Холодная технология без нагрева. Здоровье волос важнее сиюминутного объёма.</p></div>
+          <div class="value"><span class="value-num">03</span><h3>Индивидуальность</h3><p>Цвет, толщина и структура подбираются лично под вас — результат остаётся деликатным даже при отросших корнях.</p></div>
+          <div class="value"><span class="value-num">04</span><h3>Спокойный ритм</h3><p>Без конвейера и спешки. Одна клиентка — всё внимание только ей.</p></div>
+        </div>
+
+        <blockquote class="pullquote split-text">Естественность важнее длины</blockquote>
+      </div>
+    </section>
+
+    <!-- 03 · УСЛУГИ -->
+    <section class="section services scene-section" id="services">
+      <div class="container">
+        <div class="section-head">
+          <span class="index">02</span>
+          <span class="kicker">Услуги</span>
+        </div>
+        <h2 class="section-title split-text">Что мы делаем</h2>
+        <p class="lead">Полный цикл: от подбора и изготовления волос до наращивания, коррекции и ухода.</p>
+        <div class="services-grid">
+          <article class="tilt service-card" data-tilt><span class="card-num">01</span><h3>Холодное наращивание</h3><p>Бережная технология без нагрева — сохраняет здоровье собственных волос.</p></article>
+          <article class="tilt service-card" data-tilt><span class="card-num">02</span><h3>Коррекция</h3><p>Своевременное обновление капсул — аккуратно и без вреда для длины.</p></article>
+          <article class="tilt service-card" data-tilt><span class="card-num">03</span><h3>Окрашивание</h3><p>Тонирование и окрашивание натуральных волос для идеального совпадения.</p></article>
+          <article class="tilt service-card" data-tilt><span class="card-num">04</span><h3>Подбор под оттенок и&nbsp;структуру</h3><p>Индивидуальный подбор, чтобы наращённые волосы не отличались от ваших.</p></article>
+          <article class="tilt service-card" data-tilt><span class="card-num">05</span><h3>Незаметные капсулы</h3><p>Мелкие капсулы, которые не чувствуются и не видны в причёске.</p></article>
+          <article class="tilt service-card" data-tilt><span class="card-num">06</span><h3>Изготовление и продажа волос</h3><p>Натуральные славянские волосы под заказ — собственное изготовление и продажа.</p></article>
+        </div>
+        <figure class="services-accent reveal-media" data-reveal>
+          <div class="cover" aria-hidden="true"></div>
+          <img src="images/657c3e817b29a7efd8764affc8168809.jpg" alt="Незаметные капсулы наращивания — работа команды студии" loading="lazy" />
+        </figure>
+      </div>
+    </section>
+
+    <!-- 04 · ЦЕНЫ — ориентир по рынку Москвы -->
+    <section class="section prices scene-section" id="prices">
+      <div class="container">
+        <div class="section-head">
+          <span class="index">03</span>
+          <span class="kicker">Цены</span>
+        </div>
+        <h2 class="section-title split-text">Прайс</h2>
+        <p class="lead price-note">Актуальный прайс и описание услуг — на отдельной странице студии. Финальная стоимость зависит от объёма, длины и качества волос.</p>
+        <div class="price-list">
+          <div class="price-row"><div class="price-info"><h3>Холодное наращивание</h3><p>Бережная технология без нагрева, полный объём.</p></div><div class="price-value">от 4&nbsp;800&nbsp;₽</div></div>
+          <div class="price-row"><div class="price-info"><h3>Коррекция</h3><p>Обновление капсул на отросших волосах.</p></div><div class="price-value">от 4&nbsp;000&nbsp;₽</div></div>
+          <div class="price-row"><div class="price-info"><h3>Окрашивание / тонирование</h3><p>Окрашивание натуральных волос для точного совпадения оттенка.</p></div><div class="price-value">по запросу</div></div>
+          <div class="price-row"><div class="price-info"><h3>Снятие</h3><p>Аккуратное снятие капсул без вреда для длины.</p></div><div class="price-value">от 1&nbsp;700&nbsp;₽</div></div>
+          <div class="price-row"><div class="price-info"><h3>Натуральные волосы, 50&nbsp;г</h3><p>Подбор и продажа славянских волос под ваш оттенок.</p></div><div class="price-value">от 7&nbsp;250&nbsp;₽</div></div>
+          <div class="price-row"><div class="price-info"><h3>Натуральные волосы, 100&nbsp;г</h3><p>Набор для полного объёма и длины.</p></div><div class="price-value">от 14&nbsp;900&nbsp;₽</div></div>
+          <div class="price-row"><div class="price-info"><h3>Изготовление под заказ</h3><p>Подготовка и изготовление натуральных волос индивидуально.</p></div><div class="price-value">по запросу</div></div>
+        </div>
+        <p class="stats-note">Точный расчёт — бесплатно на консультации. Команда студии подскажет стоимость под вашу задачу.</p>
+        <a class="btn btn-ghost" href="https://leto-hair-ulitsa-borisovskie-prudy.clients.site/" target="_blank" rel="noopener">Открыть актуальный прайс <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+
+    <!-- 05 · РАБОТЫ / ГАЛЕРЕЯ (горизонталь) -->
+    <section class="section works scene-section" id="works" data-horizontal>
+      <div class="container">
+        <div class="section-head"><span class="index">04</span><span class="kicker">Работы</span></div>
+        <h2 class="section-title split-text">Галерея работ</h2>
+        <p class="lead">Работы, в которых важны тактильность, оттенок и естественное движение волос.</p>
+      </div>
+      <div class="h-viewport" data-h-viewport>
+        <div class="h-track" data-h-track id="worksTrack">
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/15c7a4594a450cf651e2c6fa9a6c38d4.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/15c7a4594a450cf651e2c6fa9a6c38d4.jpg" alt="Работа студии: естественное наращивание волос" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/1745ca208c2dfd1987f5da6be1cb8563.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/1745ca208c2dfd1987f5da6be1cb8563.jpg" alt="Работа студии: длинные ухоженные волосы" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/2534b5c2744df8b71b702336d4371c96.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/2534b5c2744df8b71b702336d4371c96.jpg" alt="Работа студии: объёмная причёска после наращивания" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/2faccfbd7c16273f43c11c1f27cfb609.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/2faccfbd7c16273f43c11c1f27cfb609.jpg" alt="Работа студии: естественный оттенок волос" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/657c3e817b29a7efd8764affc8168809.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/657c3e817b29a7efd8764affc8168809.jpg" alt="Работа студии: незаметные капсулы наращивания" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/6afdc035f53a903455435732023f0ab3.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/6afdc035f53a903455435732023f0ab3.jpg" alt="Работа студии: окрашивание и подбор цвета" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/9bc67894b7819ba5754eb4563cb4f488.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/9bc67894b7819ba5754eb4563cb4f488.jpg" alt="Работа студии: гладкие блестящие волосы" loading="lazy" /></button>
+          <button class="tilt gallery-card reveal-media" data-tilt data-reveal data-full="images/b5a02a408e76339278e07d97be3839a9.jpg" aria-label="Открыть фото крупнее"><div class="cover" aria-hidden="true"></div><img src="images/b5a02a408e76339278e07d97be3839a9.jpg" alt="Работа студии: аккуратная длина и объём" loading="lazy" /></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 06 · ЦИФРЫ -->
+    <section class="section stats scene-section" id="stats">
+      <div class="container">
+        <div class="section-head"><span class="index">05</span><span class="kicker">Почему нам доверяют</span></div>
+        <div class="stats-grid">
+          <div class="stat"><div class="stat-num" data-count="5" data-decimals="1">0,0</div><div class="stat-label">Рейтинг из&nbsp;5,0</div></div>
+          <div class="stat"><div class="stat-num" data-count="54">0</div><div class="stat-label">Оценок</div></div>
+          <div class="stat"><div class="stat-num" data-count="51">0</div><div class="stat-label">Отзывов</div></div>
+          <div class="stat"><div class="stat-num" data-count="6">0</div><div class="stat-label">Лет с одними клиентками</div></div>
+        </div>
+        <p class="stats-note">Информация подтверждена владельцем.</p>
+      </div>
+    </section>
+
+    <!-- 07 · ОТЗЫВЫ (горизонталь) -->
+    <section class="section reviews scene-section" id="reviews" data-horizontal>
+      <div class="container">
+        <div class="section-head"><span class="index">06</span><span class="kicker">Отзывы</span></div>
+        <h2 class="section-title split-text">Что говорят клиентки</h2>
+        <p class="lead">Вдохновлены реальными отзывами на Яндексе. Каждая история — про спокойный сервис и результат, который остаётся своим.</p>
+      </div>
+      <div class="h-viewport" data-h-viewport>
+        <div class="h-track reviews-track" data-h-track data-marquee id="reviewsTrack">
+          <article class="review-card"><div class="stars" aria-label="5 из 5">★★★★★</div><p>«Капсулы совсем незаметные — даже парикмахер не сразу понял, что волосы наращённые. Хожу в студию уже четыре года и не собираюсь никуда уходить».</p><div class="review-author">Марина</div></article>
+          <article class="review-card"><div class="stars" aria-label="5 из 5">★★★★★</div><p>«Оттенок подобрали идеально, совпадение один в один. Очень внимательная команда, спокойная атмосфера и понятный подход».</p><div class="review-author">Екатерина</div></article>
+          <article class="review-card"><div class="stars" aria-label="5 из 5">★★★★★</div><p>«Волосы мягкие, лёгкие, не путаются. Уже шесть лет наращиваюсь только здесь — это о многом говорит».</p><div class="review-author">Анна</div></article>
+          <article class="review-card"><div class="stars" aria-label="5 из 5">★★★★★</div><p>«Очень бережно и без спешки. Чувствуется, что мастер любит своё дело. Результат естественный, всем советую».</p><div class="review-author">Ольга К.</div></article>
+          <article class="review-card"><div class="stars" aria-label="5 из 5">★★★★★</div><p>«Маленькие капсулы вообще не чувствуются. Наращивание держится долго, коррекции удобные. Спасибо за заботу!»</p><div class="review-author">Дарья</div></article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 08 · ПЕРВЫЙ ВИЗИТ -->
+    <section class="section visit scene-section" id="visit">
+      <div class="container">
+        <div class="section-head"><span class="index">07</span><span class="kicker">Первый визит</span></div>
+        <div class="visit-layout">
+          <div>
+            <h2 class="section-title split-text">Спокойно. По шагам.</h2>
+            <p class="lead">До результата не нужно ничего угадывать. Сначала обсудим вашу задачу, затем подберём решение и согласуем удобную запись.</p>
+          </div>
+          <ol class="visit-steps">
+            <li class="visit-step"><span>01</span><div><h3>Расскажите о желаемом результате</h3><p>Длину, объём, оттенок и то, что важно именно вам, можно обсудить заранее.</p></div></li>
+            <li class="visit-step"><span>02</span><div><h3>Подберём вариант</h3><p>На консультации оцениваются исходные волосы, чтобы результат выглядел естественно и был комфортным.</p></div></li>
+            <li class="visit-step"><span>03</span><div><h3>Запишемся в удобное окно</h3><p>Выберите связь, которая удобнее: звонок или WhatsApp. Без навязчивых форм и ожидания ответа.</p></div></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- 09 · FAQ -->
+    <section class="section faq scene-section" id="faq">
+      <div class="container">
+        <div class="section-head"><span class="index">08</span><span class="kicker">Вопросы</span></div>
+        <div class="faq-grid">
+          <div class="faq-intro">
+            <h2 class="section-title split-text">Важно знать до записи</h2>
+            <p class="lead">Коротко о том, что обычно хочется уточнить перед первым визитом.</p>
+            <a class="link-underline" href="#contacts">Задать свой вопрос</a>
+          </div>
+          <div class="faq-list">
+            <details class="faq-item"><summary>Как подобрать оттенок, длину и объём?<span aria-hidden="true">+</span></summary><p>Это обсуждается до процедуры: учитываются оттенок, структура и то, какой эффект вы хотите получить. Так результат выглядит не случайным, а вашим.</p></details>
+            <details class="faq-item"><summary>Будут ли заметны капсулы?<span aria-hidden="true">+</span></summary><p>Способ и расположение подбираются под исходные волосы и привычную причёску. На консультации можно сразу обсудить зоны, которые для вас особенно важны.</p></details>
+            <details class="faq-item"><summary>Можно ли прийти с примерами?<span aria-hidden="true">+</span></summary><p>Да. Сохраните фото длины, объёма или оттенка, который нравится: это помогает точнее понять ожидание и обсудить реалистичный результат.</p></details>
+            <details class="faq-item"><summary>Как ухаживать после процедуры?<span aria-hidden="true">+</span></summary><p>Рекомендации зависят от выбранного решения и состояния ваших волос. Мастер объяснит их после процедуры — без универсальных советов, которые могут не подойти.</p></details>
+            <details class="faq-item"><summary>Как быстрее всего записаться?<span aria-hidden="true">+</span></summary><p>Позвоните или напишите в WhatsApp. Сразу укажите, что хотите изменить, — так будет проще сориентировать вас по ближайшему окну.</p></details>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 · ФИНАЛЬНЫЙ ПРИЗЫВ -->
+    <section class="section closing scene-section" id="closing">
+      <div class="container closing-card reveal-media" data-reveal>
+        <div class="cover" aria-hidden="true"></div>
+        <div class="closing-content">
+          <span class="kicker">Студия «Мне можно» · Москва</span>
+          <h2>Ваша длина.<br />Ваше решение.</h2>
+          <p>Начните со спокойного разговора — команда студии поможет понять, какой вариант подойдёт именно вам.</p>
+          <a class="btn btn-primary" href="https://yandex.ru/maps/org/mne_mozhno/11885232271/?booking%5Bpage%5D=menu&booking%5Bpermalink%5D=11885232271&ll=37.739608%2C55.633760&z=16" target="_blank" rel="noopener">Выбрать время <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 · КОНТАКТЫ -->
+    <section class="arrival scene-section" id="arrivalScene" aria-label="Небольшая пауза перед записью">
+      <div class="arrival-stage">
+        <div class="arrival-copybox">
+          <p class="arrival-kicker">Небольшая пауза</p>
+          <p class="arrival-line" data-arrival-line>Стой.</p>
+          <p class="arrival-line" data-arrival-line>Остановись на секунду.</p>
+          <p class="arrival-line arrival-line-accent" data-arrival-line>Ты уже близко к своему «можно».</p>
+          <p class="arrival-line" data-arrival-line>Листай дальше — спокойно.</p>
+          <p class="arrival-note" id="arrivalNote">Не нужно решать всё сейчас. Можно просто написать в студию, задать один вопрос и понять, что подойдёт именно тебе.</p>
+        </div>
+        <span class="arrival-page" aria-hidden="true">09 / пауза</span>
+      </div>
+    </section>
+
+    <section class="section contacts scene-section" id="contacts">
+      <div class="container">
+        <div class="section-head"><span class="index">09</span><span class="kicker">Контакты</span></div>
+        <div class="contacts-grid">
+          <div class="contacts-info">
+            <h2 class="section-title split-text">Как нас найти</h2>
+            <ul class="contact-list">
+              <li><span class="ci">Адрес</span> Москва, улица Борисовские Пруды, 10, корпус&nbsp;4</li>
+              <li><span class="ci">Метро</span> «Борисово», ~400&nbsp;м</li>
+              <li><span class="ci">Телефон</span> <a href="tel:+79661055036">+7 (966) 105-50-36</a></li>
+              <li><span class="ci">WhatsApp</span> <a href="https://wa.me/79661055036" target="_blank" rel="noopener">wa.me/79661055036</a></li>
+            </ul>
+            <div class="badges">
+              <span class="pill">Натуральные волосы</span>
+              <span class="pill">Покупка волос</span>
+              <span class="pill">Изготовление</span>
+              <span class="pill">Предварительная запись</span>
+              <span class="pill">Wi-Fi</span>
+              <span class="pill">Разные способы оплаты</span>
+            </div>
+            <div class="hero-cta">
+              <a href="https://yandex.ru/maps/org/mne_mozhno/11885232271/?booking%5Bpage%5D=menu&booking%5Bpermalink%5D=11885232271&ll=37.739608%2C55.633760&z=16" class="btn btn-primary" target="_blank" rel="noopener">Записаться <span aria-hidden="true">↗</span></a>
+              <a href="https://wa.me/79661055036" class="btn btn-ghost" target="_blank" rel="noopener">WhatsApp</a>
+            </div>
+          </div>
+          <div class="contacts-map">
+            <iframe src="https://yandex.ru/map-widget/v1/?text=Москва,%20Борисовские%20Пруды,%2010к4"
+              title="Карта: студия «Мне можно», Борисовские Пруды 10к4"
+              width="100%" height="100%" frameborder="0" loading="lazy" allowfullscreen></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 09 · FOOTER -->
+    <footer class="footer">
+      <div class="container footer-inner">
+        <div class="logo"><span class="logo-mark">✦</span><span class="logo-text">Мне&nbsp;можно</span></div>
+        <p class="footer-tag">Студия наращивания волос · Команда мастеров</p>
+        <p class="footer-copy">© 2026 «Мне можно». Все права защищены.</p>
+      </div>
+    </footer>
+
+  </main>
+
+  <a class="booking-fab" href="https://yandex.ru/maps/org/mne_mozhno/11885232271/?booking%5Bpage%5D=menu&booking%5Bpermalink%5D=11885232271&ll=37.739608%2C55.633760&z=16" target="_blank" rel="noopener" aria-label="Записаться через Яндекс Карты">
+    <span class="booking-fab-dot" aria-hidden="true"></span>Записаться
+  </a>
+
+  <div class="mobile-booking" aria-label="Быстрая запись">
+    <a href="tel:+79661055036">Позвонить</a>
+    <a href="https://yandex.ru/maps/org/mne_mozhno/11885232271/?booking%5Bpage%5D=menu&booking%5Bpermalink%5D=11885232271&ll=37.739608%2C55.633760&z=16" target="_blank" rel="noopener">Записаться</a>
+  </div>
+
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Просмотр фотографии" hidden>
+    <button class="lightbox-close" id="lightboxClose" aria-label="Закрыть">✕</button>
+    <img id="lightboxImg" src="" alt="Увеличенное фото работы" />
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <script src="script.js?v=19"></script>
+</body>
+</html>
