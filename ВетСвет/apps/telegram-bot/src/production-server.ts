@@ -194,12 +194,15 @@ async function handleUpdate(update: TgUpdate) {
     if (!match) return;
     const admin = await adminFor(String(callback.message.chat.id), String(callback.from.id));
     if (!admin) { await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: 'Нет прав администратора.', show_alert: true }); return; }
-    const proof = await db.telegramPaymentProof.findUnique({ where: { id: match[2] } });
+    const proof = await db.telegramPaymentProof.findUnique({ where: { id: match[2] }, include: { consultation: true } });
     if (!proof || proof.state !== 'PENDING_REVIEW') { await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: 'Чек уже обработан.' }); return; }
     const approved = match[1] === 'approve';
+    const consultationInvoice = proof.consultation?.appointmentId ? await db.invoice.findUnique({ where: { appointmentId: proof.consultation.appointmentId } }) : undefined;
     await db.$transaction([
       db.telegramPaymentProof.update({ where: { id: proof.id }, data: { state: approved ? 'CONFIRMED' : 'REJECTED', reviewedAt: new Date(), reviewedByChatId: admin.chatId } }),
-      ...(proof.requestId ? [db.telegramRequest.update({ where: { id: proof.requestId }, data: { state: approved ? 'READY' : 'WAITING_PAYMENT' } })] : [])
+      ...(proof.requestId ? [db.telegramRequest.update({ where: { id: proof.requestId }, data: { state: approved ? 'READY' : 'WAITING_PAYMENT' } })] : []),
+      ...(proof.consultationId ? [db.consultation.update({ where: { id: proof.consultationId }, data: { paymentState: approved ? 'CONFIRMED' : 'AWAITING_PROOF', state: approved ? 'READY_FOR_SCHEDULING' : 'WAITING_PAYMENT' } })] : []),
+      ...(consultationInvoice ? [db.invoice.update({ where: { id: consultationInvoice.id }, data: { state: approved ? 'PAID' : 'PENDING_PAYMENT_REVIEW', ...(approved ? { paidMinor: consultationInvoice.totalMinor } : {}) } })] : [])
     ]);
     await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: approved ? 'Оплата подтверждена.' : 'Оплата отклонена.' });
     await say(proof.chatId, approved ? 'Оплата подтверждена. Мы получили запрос и скоро вернёмся с ответом.' : 'Чек пока не удалось подтвердить. Проверьте перевод и отправьте новый скриншот.');
@@ -210,6 +213,29 @@ async function handleUpdate(update: TgUpdate) {
   const chatId = String(message.chat.id);
   const text = message.text?.trim() ?? '';
   const fullName = [message.from.first_name, message.from.last_name].filter(Boolean).join(' ') || 'Владелец питомца';
+  const consultationLink = text.match(/^\/start\s+c_([0-9a-f-]{36})_([A-Za-z0-9_-]{16,})$/i);
+  if (consultationLink) {
+    const consultation = await db.consultation.findFirst({ where: { id: consultationLink[1], organizationId: config.organizationId } });
+    if (!consultation || consultation.paymentTokenExpiresAt <= new Date() || !sameSecret(consultation.paymentTokenHash, digest(consultationLink[2])) || !['WAITING_PAYMENT', 'PAYMENT_LINKED'].includes(consultation.state)) {
+      await say(chatId, 'Ссылка на оплату недействительна или уже обработана. Вернитесь в кабинет и создайте новую консультацию.');
+      return;
+    }
+    const owner = await db.owner.findFirst({ where: { id: consultation.ownerId, organizationId: config.organizationId } });
+    const telegramIdentity = await db.userIdentity.findUnique({ where: { telegramUserId } });
+    if (!owner || (telegramIdentity && owner.userId && telegramIdentity.id !== owner.userId)) {
+      await say(chatId, 'Этот Telegram уже связан с другим профилем VetSvet. Откройте ссылку из нужного личного кабинета.');
+      return;
+    }
+    const linkedUser = owner.userId
+      ? await db.userIdentity.update({ where: { id: owner.userId }, data: { telegramUserId } })
+      : await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
+    await db.$transaction([
+      db.owner.update({ where: { id: owner.id }, data: { userId: linkedUser.id, telegramUserId, fullName: owner.fullName || fullName } }),
+      db.consultation.update({ where: { id: consultation.id }, data: { telegramUserId, telegramChatId: chatId, state: 'PAYMENT_LINKED' } })
+    ]);
+    await say(chatId, `Консультация связана с вашим кабинетом. Переведите согласованную с клиникой сумму по СБП на ${config.sbpPhone}, затем пришлите сюда скриншот чека. Его проверит администратор.`);
+    return;
+  }
   const login = text.match(/^\/start\s+(?:l|login)_([0-9a-f-]{36})_([A-Za-z0-9_-]{16,})$/i);
   if (login) {
     const confirmed = await confirmTelegramLogin(login[1], login[2], telegramUserId, chatId, fullName);
@@ -261,8 +287,10 @@ async function handleUpdate(update: TgUpdate) {
   if (text === '/payment') { await say(chatId, `Оплата консультации: перевод по СБП на ${config.sbpPhone}. После перевода отправьте сюда скриншот чека — его подтвердит администратор.`); return; }
   if (text === '/emergency') { await say(chatId, 'Если питомцу плохо прямо сейчас, не ждите ответа в чате: позвоните в клинику или обратитесь в ближайшую круглосуточную ветеринарную помощь.'); return; }
   if (message.photo?.length) {
-    const request = await db.telegramRequest.findFirst({ where: { telegramUserId, state: 'WAITING_PAYMENT' }, orderBy: { createdAt: 'desc' } });
-    const proof = await db.telegramPaymentProof.create({ data: { requestId: request?.id, telegramUserId, chatId, sourceMessageId: message.message_id, purpose: request ? 'CONSULTATION' : 'APPOINTMENT', state: 'PENDING_REVIEW' } });
+    const consultation = await db.consultation.findFirst({ where: { organizationId: config.organizationId, telegramUserId, telegramChatId: chatId, state: { in: ['PAYMENT_LINKED', 'WAITING_PAYMENT'] }, paymentState: 'AWAITING_PROOF' }, orderBy: { createdAt: 'desc' } });
+    const request = consultation ? undefined : await db.telegramRequest.findFirst({ where: { telegramUserId, state: 'WAITING_PAYMENT' }, orderBy: { createdAt: 'desc' } });
+    const proof = await db.telegramPaymentProof.create({ data: { requestId: request?.id, consultationId: consultation?.id, telegramUserId, chatId, sourceMessageId: message.message_id, purpose: consultation || request ? 'CONSULTATION' : 'APPOINTMENT', state: 'PENDING_REVIEW' } });
+    if (consultation) await db.consultation.update({ where: { id: consultation.id }, data: { paymentState: 'PENDING_REVIEW', state: 'PAYMENT_REVIEW' } });
     const admins = await adminChats();
     await Promise.all(admins.flatMap((admin) => [
       telegram('forwardMessage', { chat_id: admin.chatId, from_chat_id: chatId, message_id: message.message_id }),
@@ -404,15 +432,16 @@ const server = createServer(async (request, response) => {
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
       const petIds = relations.map((item) => item.pet.id);
-      const [appointments, plans, groomingVisits] = await Promise.all([
+      const [appointments, plans, groomingVisits, consultations] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { startsAt: 'asc' }, take: 20 }),
         db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } }),
-        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 })
+        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+        db.consultation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { createdAt: 'desc' }, take: 20 })
       ]);
       const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
       const variantById = new Map(variants.map((item) => [item.id, item]));
       const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
-      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), timeline: [] })), petCount: petIds.length });
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), timeline: [] })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), petCount: petIds.length });
       return;
     }
     if (request.method === 'PATCH' && url.pathname === '/api/v1/client/profile') {
@@ -464,6 +493,7 @@ const server = createServer(async (request, response) => {
       if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) { json(response, 400, { error: 'INVALID_BOOKING_REQUEST' }); return; }
       const allowed = Array.isArray(variant.allowedSpecies) && variant.allowedSpecies.includes(relation.pet.species);
       if (!allowed) { json(response, 400, { error: 'SPECIES_NOT_ALLOWED' }); return; }
+      if (variant.service.kind === 'CONSULTATION') { json(response, 400, { error: 'USE_CONSULTATION_WORKFLOW' }); return; }
       const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000);
       const conflict = await db.appointment.findFirst({ where: { organizationId: config.organizationId, petId: relation.petId, startsAt, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } } });
       if (conflict) { json(response, 409, { error: 'DUPLICATE_APPOINTMENT_REQUEST' }); return; }
@@ -475,18 +505,59 @@ const server = createServer(async (request, response) => {
       await auditCommand({ actorId: account.current.userId, action: 'appointment.requested', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { petId: relation.petId, variantId: variant.id } });
       json(response, 201, { appointment: { id: result.appointment.id, state: result.appointment.state, startsAt: result.appointment.startsAt, endsAt: result.appointment.endsAt }, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor, currency: result.invoice.currency } }); return;
     }
+    if (request.method === 'POST' && url.pathname === '/api/v1/client/consultations') {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { petId?: string; locationId?: string; startsAt?: string; question?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const question = String(input.question ?? '').trim();
+      if (question.length < 10 || question.length > 3000) { json(response, 400, { error: 'CONSULTATION_QUESTION_REQUIRED' }); return; }
+      const [relation, variant, location] = await Promise.all([
+        db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: String(input.petId ?? '') }, include: { pet: true } }),
+        db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, service: { kind: 'CONSULTATION', onlineBookable: true } }, include: { service: true }, orderBy: { name: 'asc' } }),
+        db.location.findFirst({ where: { organizationId: config.organizationId, id: String(input.locationId ?? ''), active: true } })
+      ]);
+      const startsAt = new Date(String(input.startsAt ?? ''));
+      if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) { json(response, 400, { error: 'INVALID_CONSULTATION_REQUEST' }); return; }
+      const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000);
+      const duplicate = await db.consultation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, state: { in: ['WAITING_PAYMENT', 'PAYMENT_LINKED', 'PAYMENT_REVIEW', 'READY_FOR_SCHEDULING', 'CONFIRMED'] } } });
+      if (duplicate) { json(response, 409, { error: 'ACTIVE_CONSULTATION_EXISTS' }); return; }
+      const secret = randomBytes(24).toString('base64url');
+      const result = await db.$transaction(async (tx) => {
+        const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
+        const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: 'PENDING_PAYMENT_REVIEW', totalMinor: variant.priceMinor, currency: variant.currency } });
+        const consultation = await tx.consultation.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, question, paymentTokenHash: digest(secret), paymentTokenExpiresAt: new Date(Date.now() + 48 * 60 * 60_000) } });
+        return { appointment, invoice, consultation };
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'consultation.requested', aggregateType: 'Consultation', aggregateId: result.consultation.id, idempotencyKey: key, payload: { appointmentId: result.appointment.id, petId: relation.petId } });
+      json(response, 201, { consultation: { id: result.consultation.id, state: result.consultation.state, paymentState: result.consultation.paymentState }, invoice: { id: result.invoice.id, state: result.invoice.state }, telegramUrl: `https://t.me/${config.botUsername}?start=c_${result.consultation.id}_${secret}` }); return;
+    }
+    const consultationPaymentLink = url.pathname.match(/^\/api\/v1\/client\/consultations\/([^/]+)\/payment-link$/);
+    if (request.method === 'POST' && consultationPaymentLink) {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      const consultation = await db.consultation.findFirst({ where: { id: decodeURIComponent(consultationPaymentLink[1]), organizationId: config.organizationId, ownerId: account.owner.id } });
+      if (!consultation) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      if (!['WAITING_PAYMENT', 'PAYMENT_LINKED'].includes(consultation.state) || !['AWAITING_PROOF'].includes(consultation.paymentState)) { json(response, 409, { error: 'PAYMENT_LINK_NOT_AVAILABLE' }); return; }
+      const secret = randomBytes(24).toString('base64url');
+      await db.consultation.update({ where: { id: consultation.id }, data: { paymentTokenHash: digest(secret), paymentTokenExpiresAt: new Date(Date.now() + 48 * 60 * 60_000) } });
+      await auditCommand({ actorId: account.current.userId, action: 'consultation.payment_link_rotated', aggregateType: 'Consultation', aggregateId: consultation.id, idempotencyKey: key });
+      json(response, 200, { telegramUrl: `https://t.me/${config.botUsername}?start=c_${consultation.id}_${secret}` }); return;
+    }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/dashboard') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } }, orderBy: { startsAt: 'asc' }, take: 80 });
-      const [owners, pets, variants, invoices, groomingVisits] = await Promise.all([
+      const [owners, pets, variants, invoices, groomingVisits, consultations] = await Promise.all([
         db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.ownerId) } } }),
         db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.petId) } } }),
         db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }),
         db.invoice.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } }),
-        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } })
+        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } }),
+        db.consultation.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } })
       ]);
-      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
-      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
+      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item])); const consultationByAppointment = new Map(consultations.map((item) => [item.appointmentId, item]));
+      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', consultation: consultationByAppointment.get(item.id) ? { id: consultationByAppointment.get(item.id)!.id, state: consultationByAppointment.get(item.id)!.state, paymentState: consultationByAppointment.get(item.id)!.paymentState, question: consultationByAppointment.get(item.id)!.question, response: consultationByAppointment.get(item.id)!.response } : undefined, groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
     }
     const staffAppointment = url.pathname.match(/^\/api\/v1\/staff\/appointments\/([^/]+)$/);
     if (request.method === 'PATCH' && staffAppointment) {
@@ -499,15 +570,23 @@ const server = createServer(async (request, response) => {
       const action = String(input.action ?? '').toUpperCase();
       if (action === 'CONFIRM') {
         if (appointment.state !== 'REQUESTED') { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
+        const consultation = await db.consultation.findUnique({ where: { appointmentId: appointment.id } });
+        if (consultation && consultation.paymentState !== 'CONFIRMED') { json(response, 409, { error: 'CONSULTATION_PAYMENT_REQUIRED' }); return; }
         const overlap = await db.appointment.findFirst({ where: { organizationId: config.organizationId, staffId: account.current.userId, state: { in: ['CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: appointment.endsAt }, endsAt: { gt: appointment.startsAt } } });
         if (overlap) { json(response, 409, { error: 'STAFF_TIME_CONFLICT' }); return; }
         const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CONFIRMED', staffId: account.current.userId } });
+        if (consultation) await db.consultation.update({ where: { id: consultation.id }, data: { state: 'CONFIRMED', staffId: account.current.userId } });
         await auditCommand({ actorId: account.current.userId, action: 'appointment.confirmed', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key });
         json(response, 200, { appointment: { id: updated.id, state: updated.state, staffId: updated.staffId } }); return;
       }
       if (action === 'CANCEL') {
         if (!['REQUESTED', 'CONFIRMED'].includes(appointment.state)) { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
-        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED' } });
+        const linkedConsultation = await db.consultation.findUnique({ where: { appointmentId: appointment.id } });
+        const updated = await db.$transaction(async (tx) => {
+          const cancelled = await tx.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED' } });
+          if (linkedConsultation) await tx.consultation.update({ where: { id: linkedConsultation.id }, data: { state: 'CANCELLED' } });
+          return cancelled;
+        });
         await auditCommand({ actorId: account.current.userId, action: 'appointment.cancelled', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { note: String(input.note ?? '').trim().slice(0, 500) } });
         json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
       }
@@ -521,6 +600,29 @@ const server = createServer(async (request, response) => {
         json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
       }
       json(response, 400, { error: 'UNKNOWN_APPOINTMENT_ACTION' }); return;
+    }
+    const staffConsultation = url.pathname.match(/^\/api\/v1\/staff\/consultations\/([^/]+)$/);
+    if (request.method === 'PATCH' && staffConsultation) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN'].includes(account.membership.role)) { json(response, 403, { error: 'CLINICAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { response?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const consultation = await db.consultation.findFirst({ where: { id: decodeURIComponent(staffConsultation[1]), organizationId: config.organizationId } });
+      if (!consultation || consultation.state !== 'CONFIRMED' || consultation.paymentState !== 'CONFIRMED') { json(response, 409, { error: 'CONSULTATION_NOT_READY' }); return; }
+      if (consultation.staffId !== account.current.userId && account.membership.role !== 'ADMIN') { json(response, 403, { error: 'ASSIGNED_STAFF_REQUIRED' }); return; }
+      const appointment = await db.appointment.findFirst({ where: { id: consultation.appointmentId, organizationId: config.organizationId, state: 'IN_SERVICE' } });
+      if (!appointment) { json(response, 409, { error: 'CONSULTATION_VISIT_NOT_STARTED' }); return; }
+      const answer = String(input.response ?? '').trim();
+      if (answer.length < 20 || answer.length > 6000) { json(response, 400, { error: 'CONSULTATION_RESPONSE_REQUIRED' }); return; }
+      const result = await db.$transaction(async (tx) => {
+        const completed = await tx.consultation.update({ where: { id: consultation.id }, data: { state: 'COMPLETED', response: answer, respondedAt: new Date() } });
+        await tx.appointment.update({ where: { id: consultation.appointmentId }, data: { state: 'READY' } });
+        return completed;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'consultation.completed', aggregateType: 'Consultation', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: result.appointmentId } });
+      if (result.telegramChatId) await say(result.telegramChatId, 'Ответ по консультации готов и сохранён в личном кабинете VetSvet. Если состояние питомца ухудшается, не ждите сообщения — обратитесь за срочной помощью.');
+      json(response, 200, { consultation: { id: result.id, state: result.state, response: result.response, respondedAt: result.respondedAt } }); return;
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/staff/grooming/visits') {
       const account = await currentStaff(request); const key = idempotencyKey(request);

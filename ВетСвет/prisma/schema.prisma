@@ -154,6 +154,7 @@ model TelegramRequest {
 model TelegramPaymentProof {
   id              String   @id @default(uuid())
   requestId       String?  @unique
+  consultationId  String?  @unique
   telegramUserId  String
   chatId          String
   sourceMessageId Int
@@ -164,6 +165,7 @@ model TelegramPaymentProof {
   reviewNote      String?
   createdAt       DateTime @default(now())
   request         TelegramRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  consultation    Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   @@index([state, createdAt])
   @@index([telegramUserId, chatId])
 }
@@ -193,6 +195,7 @@ model Owner {
   user           UserIdentity? @relation(fields: [userId], references: [id], onDelete: Restrict)
   relations      OwnerPetRelation[]
   invoices       Invoice[]
+  consultations  Consultation[]
   consents       Consent[]
   surgicalCases  SurgicalCase[]
   dentalCharts   DentalChart[]
@@ -215,6 +218,7 @@ model Pet {
   surgicalCases  SurgicalCase[]
   dentalCharts   DentalChart[]
   labOrders      LabOrder[]
+  consultations  Consultation[]
   specimens      Specimen[]
   @@index([organizationId, name])
 }
@@ -270,8 +274,37 @@ model Appointment {
   endsAt         DateTime
   state          String
   createdAt      DateTime @default(now())
+  consultation   Consultation?
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
+}
+
+model Consultation {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  ownerId               String
+  petId                 String
+  appointmentId         String   @unique
+  question              String
+  preferredChannel      String   @default("TELEGRAM")
+  state                 String   @default("WAITING_PAYMENT")
+  paymentState          String   @default("AWAITING_PROOF")
+  paymentTokenHash      String   @unique
+  paymentTokenExpiresAt DateTime
+  telegramUserId        String?
+  telegramChatId        String?
+  staffId               String?
+  response              String?
+  respondedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  owner                 Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet                   Pet      @relation(fields: [petId], references: [id], onDelete: Restrict)
+  appointment           Appointment @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  paymentProof          TelegramPaymentProof?
+  @@index([organizationId, ownerId, state, createdAt])
+  @@index([organizationId, petId, createdAt])
+  @@index([organizationId, paymentState, createdAt])
 }
 
 model Invoice {
