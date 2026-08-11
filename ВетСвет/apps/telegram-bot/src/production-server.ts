@@ -25,7 +25,8 @@ const config = {
   publicUrl: required('PUBLIC_URL').replace(/\/$/, ''),
   organizationId: process.env.VETSVET_ORGANIZATION_ID?.trim() || 'vetsvet-production',
   sbpPhone: required('VETSVET_SBP_PHONE'),
-  port: Number(process.env.PORT ?? 4400)
+  port: Number(process.env.PORT ?? 4400),
+  botDryRun: process.env.BOT_DRY_RUN === 'true'
 };
 const db = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });
 const root = process.cwd();
@@ -115,11 +116,24 @@ async function serveClientHome(response: ServerResponse) {
   } catch { json(response, 404, { error: 'NOT_FOUND' }); }
 }
 async function telegram(method: string, payload: Record<string, unknown>) {
+  if (config.botDryRun) return;
   const result = await fetch(`https://api.telegram.org/bot${config.botToken}/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   if (!result.ok) throw new Error(`Telegram ${method} failed.`);
 }
 async function say(chatId: string, text: string, keyboard?: unknown) {
   await telegram('sendMessage', { chat_id: chatId, text, reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined });
+}
+async function ensureBotCommandMenu() {
+  await telegram('setMyCommands', { commands: [
+    { command: 'menu', description: 'Главное меню VetSvet' },
+    { command: 'booking', description: 'Выбрать услугу и свободное окно' },
+    { command: 'consultation', description: 'Создать консультацию' },
+    { command: 'pets', description: 'Мои питомцы' },
+    { command: 'appointments', description: 'Мои записи и статусы' },
+    { command: 'payment', description: 'Оплата и отправка чека' },
+    { command: 'emergency', description: 'Что делать срочно' }
+  ] });
+  await telegram('setChatMenuButton', { menu_button: { type: 'commands' } });
 }
 async function ensureOrganization() {
   await db.organization.upsert({ where: { id: config.organizationId }, update: {}, create: { id: config.organizationId, legalName: 'VetSvet', displayName: 'ВетСвет' } });
@@ -244,11 +258,150 @@ async function passwordHash(password: string) { const salt = randomBytes(16).toS
 async function passwordMatches(password: string, encoded: string | null) { const [algorithm, salt, expected] = encoded?.split('$') ?? []; if (algorithm !== 'scrypt' || !salt || !expected) return false; const actual = Buffer.from(await scrypt(password, salt, 64) as Buffer).toString('hex'); return sameSecret(actual, expected); }
 async function createPasswordSession(response: ServerResponse, userId: string, mode: AuthMode) { const token = randomBytes(32).toString('base64url'); await db.authSession.create({ data: { userId, tokenHash: digest(token), mode, state: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400000) } }); setSession(response, token); }
 
+type BotData = Record<string, string>;
+function readBotData(value: Prisma.JsonValue): BotData {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+async function botAccount(telegramUserId: string) {
+  const user = await db.userIdentity.findUnique({ where: { telegramUserId } });
+  if (!user) return undefined;
+  const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: user.id }, { telegramUserId }] } });
+  return owner ? { user, owner } : undefined;
+}
+async function botConversation(telegramUserId: string) {
+  const record = await db.telegramConversation.findUnique({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } } });
+  if (!record || record.expiresAt <= new Date()) return undefined;
+  return { ...record, values: readBotData(record.data) };
+}
+async function saveBotConversation(telegramUserId: string, chatId: string, state: string, data: BotData = {}) {
+  return db.telegramConversation.upsert({
+    where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } },
+    update: { chatId, state, data, expiresAt: new Date(Date.now() + 30 * 60_000) },
+    create: { organizationId: config.organizationId, telegramUserId, chatId, state, data, expiresAt: new Date(Date.now() + 30 * 60_000) }
+  });
+}
+async function showBotMenu(chatId: string, telegramUserId: string) {
+  const account = await botAccount(telegramUserId);
+  const greeting = account ? `${account.owner.fullName}, выберите, что сделать.` : 'Создайте аккаунт на сайте, затем подключите Telegram в личном кабинете. После этого бот увидит питомцев, записи и консультации.';
+  await say(chatId, `VetSvet — забота рядом.\n\n${greeting}`, [
+    [{ text: '🗓 Записаться', callback_data: 'bot:booking' }, { text: '💬 Консультация', callback_data: 'bot:consultation' }],
+    [{ text: '🐾 Мои питомцы', callback_data: 'bot:pets' }, { text: '📋 Мои записи', callback_data: 'bot:appointments' }],
+    [{ text: '💳 Оплата', callback_data: 'bot:payment' }, { text: '🚑 Срочно', callback_data: 'bot:emergency' }],
+    [{ text: account ? '🌐 Открыть кабинет' : 'Создать аккаунт', url: `${config.publicUrl}/auth/` }]
+  ]);
+}
+function botDayLabel(day: string) { return new Date(`${day}T12:00:00+03:00`).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' }); }
+function botDays() {
+  const days: string[] = [];
+  for (let offset = 0; days.length < 7 && offset < 10; offset += 1) {
+    const point = new Date(Date.now() + offset * 86400000);
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(point);
+    const weekday = new Date(`${day}T12:00:00+03:00`).getUTCDay();
+    if (weekday !== 0) days.push(day);
+  }
+  return days;
+}
+async function availableBotSlots(locationId: string, variantId: string, day: string) {
+  const [location, variant] = await Promise.all([
+    db.location.findFirst({ where: { id: locationId, organizationId: config.organizationId, active: true } }),
+    db.serviceVariant.findFirst({ where: { id: variantId, organizationId: config.organizationId } })
+  ]);
+  if (!location || !variant || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
+  const slots = [10, 12, 14, 16, 18].map((hour) => new Date(`${day}T${String(hour).padStart(2, '0')}:00:00+03:00`)).filter((slot) => slot > new Date(Date.now() + 60 * 60_000));
+  const result: Date[] = [];
+  for (const startsAt of slots) {
+    const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000);
+    const occupied = await db.appointment.count({ where: { organizationId: config.organizationId, locationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } });
+    if (occupied < location.bookingCapacity) result.push(startsAt);
+  }
+  return result;
+}
+async function showBotPets(chatId: string, telegramUserId: string, purpose: 'BOOKING' | 'CONSULTATION' | 'PROFILE', initialData: BotData = {}) {
+  const account = await botAccount(telegramUserId);
+  if (!account) { await showBotMenu(chatId, telegramUserId); return; }
+  const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id }, include: { pet: true }, orderBy: { pet: { name: 'asc' } } });
+  if (purpose === 'PROFILE') {
+    await say(chatId, relations.length ? `Ваши питомцы:\n${relations.map((item) => `• ${item.pet.name} · ${item.pet.species}${item.pet.breed ? ` · ${item.pet.breed}` : ''}`).join('\n')}` : 'В профиле пока нет питомцев.', [[{ text: '➕ Добавить питомца', callback_data: 'bot:addpet' }], [{ text: '← Главное меню', callback_data: 'bot:menu' }]]);
+    return;
+  }
+  if (!relations.length) { await say(chatId, 'Сначала добавим питомца — это займёт меньше минуты.', [[{ text: '➕ Добавить питомца', callback_data: 'bot:addpet' }], [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+  await saveBotConversation(telegramUserId, chatId, `${purpose}_PET`, initialData);
+  await say(chatId, purpose === 'BOOKING' ? 'Кого записываем?' : 'О ком хотите проконсультироваться?', [...relations.map((item) => [{ text: `${item.pet.species === 'CAT' ? '🐈' : item.pet.species === 'DOG' ? '🐕' : '🐾'} ${item.pet.name}`, callback_data: `bot:pet:${item.pet.id}` }]), [{ text: '← Главное меню', callback_data: 'bot:menu' }]]);
+}
+async function showBotServices(chatId: string, telegramUserId: string, consultation: boolean, values: BotData) {
+  const services = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, service: { onlineBookable: true, kind: consultation ? 'CONSULTATION' : { not: 'CONSULTATION' } } }, include: { service: true }, orderBy: { service: { publicName: 'asc' } } });
+  if (!services.length) { await say(chatId, 'Сейчас нет доступных направлений. Команда уже получила сигнал — попробуйте чуть позже.', [[{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+  await saveBotConversation(telegramUserId, chatId, consultation ? 'CONSULTATION_SERVICE' : 'BOOKING_SERVICE', values);
+  await say(chatId, consultation ? 'Выберите формат консультации.' : 'Выберите услугу.', [...services.slice(0, 12).map((variant) => [{ text: `${variant.service.publicName} · ${variant.name}${variant.priceMinor ? ` · ${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` : ''}`, callback_data: `bot:service:${variant.id}` }]), [{ text: '← Главное меню', callback_data: 'bot:menu' }]]);
+}
+async function showBotDays(chatId: string, telegramUserId: string, state: string, values: BotData) {
+  await saveBotConversation(telegramUserId, chatId, state, values);
+  await say(chatId, 'Выберите удобный день. Показываем только рабочие дни.', [...botDays().map((day) => [{ text: botDayLabel(day), callback_data: `bot:day:${day}` }]), [{ text: '← Главное меню', callback_data: 'bot:menu' }]]);
+}
+async function createBotBooking(telegramUserId: string, chatId: string, values: BotData) {
+  const account = await botAccount(telegramUserId); if (!account) throw new Error('ACCOUNT_LINK_REQUIRED');
+  const [relation, variant, location] = await Promise.all([
+    db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: values.petId }, include: { pet: true } }),
+    db.serviceVariant.findFirst({ where: { id: values.variantId, organizationId: config.organizationId, service: { onlineBookable: true, kind: { not: 'CONSULTATION' } } }, include: { service: true } }),
+    db.location.findFirst({ where: { id: values.locationId, organizationId: config.organizationId, active: true } })
+  ]);
+  const startsAt = new Date(values.startsAt); if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) throw new Error('BOOKING_DATA_CHANGED');
+  const slots = await availableBotSlots(location.id, variant.id, values.day); if (!slots.some((slot) => slot.valueOf() === startsAt.valueOf())) throw new Error('SLOT_TAKEN');
+  const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000); const commandKey = `telegram-booking:${telegramUserId}:${Date.now()}`;
+  const result = await db.$transaction(async (tx) => {
+    const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
+    const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: variant.priceMinor > 0 ? 'ISSUED' : 'PAID', totalMinor: Math.max(0, variant.priceMinor), paidMinor: 0, currency: variant.currency, issuedAt: new Date(), lines: { create: { organizationId: config.organizationId, lineType: 'SERVICE', referenceId: variant.id, description: `${variant.service.publicName} · ${variant.name}`, unitPriceMinor: Math.max(0, variant.priceMinor), totalMinor: Math.max(0, variant.priceMinor) } } } });
+    const kind = variant.service.kind === 'GROOMING' ? 'GROOMING_CONSENT' : 'PROCEDURE_CONSENT'; const template = await tx.printTemplate.findFirst({ where: { organizationId: config.organizationId, kind, state: 'PUBLISHED' }, orderBy: { version: 'desc' } });
+    if (template) { const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` }); await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Согласие VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.user.id } }); }
+    return { appointment, invoice, pet: relation.pet, variant };
+  });
+  await auditCommand({ actorId: account.user.id, action: 'appointment.requested_via_telegram', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: commandKey, payload: { petId: result.pet.id, variantId: result.variant.id } });
+  await db.telegramConversation.update({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, data: { state: 'DONE', data: {}, expiresAt: new Date() } });
+  return result;
+}
+async function createBotConsultation(telegramUserId: string, chatId: string, values: BotData, question: string) {
+  const account = await botAccount(telegramUserId); if (!account) throw new Error('ACCOUNT_LINK_REQUIRED');
+  const [relation, variant, location] = await Promise.all([
+    db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: values.petId }, include: { pet: true } }),
+    db.serviceVariant.findFirst({ where: { id: values.variantId, organizationId: config.organizationId, service: { onlineBookable: true, kind: 'CONSULTATION' } }, include: { service: true } }),
+    db.location.findFirst({ where: { id: values.locationId, organizationId: config.organizationId, active: true } })
+  ]);
+  const startsAt = new Date(values.startsAt); if (!relation || !variant || !location || question.length < 10 || Number.isNaN(startsAt.valueOf())) throw new Error('CONSULTATION_DATA_CHANGED');
+  const duplicate = await db.consultation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, state: { in: ['WAITING_PAYMENT', 'PAYMENT_LINKED', 'PAYMENT_REVIEW', 'READY_FOR_SCHEDULING', 'CONFIRMED'] } } }); if (duplicate) throw new Error('CONSULTATION_ALREADY_ACTIVE');
+  const slots = await availableBotSlots(location.id, variant.id, values.day); if (!slots.some((slot) => slot.valueOf() === startsAt.valueOf())) throw new Error('SLOT_TAKEN');
+  const secret = randomBytes(20).toString('base64url'); const paid = variant.priceMinor <= 0; const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000); const commandKey = `telegram-consultation:${telegramUserId}:${Date.now()}`;
+  const result = await db.$transaction(async (tx) => {
+    const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
+    const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: paid ? 'PAID' : 'ISSUED', totalMinor: Math.max(0, variant.priceMinor), paidMinor: 0, currency: variant.currency, issuedAt: new Date(), lines: { create: { organizationId: config.organizationId, lineType: 'CONSULTATION', referenceId: variant.id, description: `${variant.service.publicName} · ${variant.name}`, unitPriceMinor: Math.max(0, variant.priceMinor), totalMinor: Math.max(0, variant.priceMinor) } } } });
+    const consultation = await tx.consultation.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, question, paymentTokenHash: digest(secret), paymentTokenExpiresAt: new Date(Date.now() + 48 * 60 * 60_000), telegramUserId, telegramChatId: chatId, state: paid ? 'READY_FOR_SCHEDULING' : 'PAYMENT_LINKED', paymentState: paid ? 'CONFIRMED' : 'AWAITING_PROOF' } });
+    const template = await tx.printTemplate.findFirst({ where: { organizationId: config.organizationId, kind: 'REMOTE_CONSULTATION_CONSENT', state: 'PUBLISHED' }, orderBy: { version: 'desc' } });
+    if (template) {
+      const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` });
+      await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Условия консультации', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.user.id } });
+    }
+    return { appointment, invoice, consultation, pet: relation.pet, variant };
+  });
+  await auditCommand({ actorId: account.user.id, action: 'consultation.requested_via_telegram', aggregateType: 'Consultation', aggregateId: result.consultation.id, idempotencyKey: commandKey, payload: { appointmentId: result.appointment.id, petId: result.pet.id } });
+  await db.telegramConversation.update({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, data: { state: 'DONE', data: {}, expiresAt: new Date() } });
+  return result;
+}
+
 async function confirmTelegramLogin(recordId: string, secret: string, telegramUserId: string, chatId: string, fullName: string) {
   const record = await db.telegramLoginRequest.findUnique({ where: { id: recordId } });
   if (!record || record.state !== 'PENDING' || record.expiresAt <= new Date() || !sameSecret(record.tokenHash, digest(secret))) return false;
-  const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
+  if (record.targetUserId) {
+    const [target, occupied] = await Promise.all([db.userIdentity.findUnique({ where: { id: record.targetUserId } }), db.userIdentity.findUnique({ where: { telegramUserId } })]);
+    if (!target || (occupied && occupied.id !== target.id)) { await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'REJECTED' } }); return false; }
+    await db.$transaction([
+      db.userIdentity.update({ where: { id: target.id }, data: { telegramUserId } }),
+      db.owner.updateMany({ where: { organizationId: config.organizationId, userId: target.id }, data: { telegramUserId } }),
+      db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } })
+    ]);
+    return true;
+  }
   if (record.mode === 'STAFF') {
+    const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
     const invite = record.staffInviteId ? await db.staffInvite.findUnique({ where: { id: record.staffInviteId } }) : undefined;
     if (record.staffInviteId) {
       if (!invite || invite.state !== 'PENDING' || invite.expiresAt <= new Date()) return false;
@@ -264,10 +417,77 @@ async function confirmTelegramLogin(recordId: string, secret: string, telegramUs
       await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } });
     }
   } else {
-    await ownerFor(telegramUserId, fullName);
+    const user = await db.userIdentity.findUnique({ where: { telegramUserId } });
+    const owner = user ? await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: user.id }, { telegramUserId }] } }) : null;
+    if (!user || !owner) { await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'REJECTED' } }); return false; }
     await db.telegramLoginRequest.update({ where: { id: record.id }, data: { state: 'CONFIRMED', telegramUserId, chatId, confirmedAt: new Date() } });
   }
   return true;
+}
+
+async function handleBotCallback(callback: NonNullable<TgUpdate['callback_query']>) {
+  if (!callback.message?.chat || !callback.data) return;
+  const chatId = String(callback.message.chat.id); const telegramUserId = String(callback.from.id); const command = callback.data;
+  if (!callback.id.startsWith('command-')) await telegram('answerCallbackQuery', { callback_query_id: callback.id });
+  if (command === 'bot:menu' || command === 'bot:cancel') { await saveBotConversation(telegramUserId, chatId, 'MENU'); await showBotMenu(chatId, telegramUserId); return; }
+  if (command === 'bot:emergency') { await say(chatId, 'Если питомцу плохо прямо сейчас, не ждите ответа в боте: позвоните в клинику или обратитесь в ближайшую круглосуточную ветеринарную помощь.', [[{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+  if (command === 'bot:payment') { await say(chatId, `Оплата консультации проходит по СБП на ${config.sbpPhone}. После перевода отправьте сюда скриншот чека — администратор проверит его вручную. Никому не сообщайте коды из SMS.`, [[{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+  const account = await botAccount(telegramUserId);
+  if (!account) { await say(chatId, 'Telegram пока не привязан к аккаунту. Сначала войдите по логину и паролю, затем нажмите «Подключить Telegram» в личном кабинете.', [[{ text: 'Открыть вход', url: `${config.publicUrl}/auth/` }], [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+  if (command === 'bot:booking') { await showBotPets(chatId, telegramUserId, 'BOOKING'); return; }
+  if (command === 'bot:consultation') { await showBotPets(chatId, telegramUserId, 'CONSULTATION'); return; }
+  if (command === 'bot:pets') { await showBotPets(chatId, telegramUserId, 'PROFILE'); return; }
+  if (command === 'bot:addpet') { await saveBotConversation(telegramUserId, chatId, 'PET_NAME'); await say(chatId, 'Напишите имя питомца одним сообщением.', [[{ text: 'Отмена', callback_data: 'bot:menu' }]]); return; }
+  if (command === 'bot:appointments') {
+    const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id, state: { not: 'CANCELLED' } }, orderBy: { startsAt: 'desc' }, take: 10 });
+    const [pets, variants, invoices] = await Promise.all([db.pet.findMany({ where: { id: { in: appointments.map((item) => item.petId) } } }), db.serviceVariant.findMany({ where: { id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }), db.invoice.findMany({ where: { appointmentId: { in: appointments.map((item) => item.id) } } })]);
+    const petById = new Map(pets.map((pet) => [pet.id, pet])); const variantById = new Map(variants.map((variant) => [variant.id, variant])); const invoiceByAppointment = new Map(invoices.filter((invoice) => invoice.appointmentId).map((invoice) => [invoice.appointmentId!, invoice]));
+    await say(chatId, appointments.length ? `Последние записи:\n\n${appointments.map((item) => { const invoice = invoiceByAppointment.get(item.id); const payment = invoice?.totalMinor ? ` · оплата ${invoice.state === 'PAID' ? 'подтверждена' : 'ожидается'}` : ''; return `• ${petById.get(item.petId)?.name ?? 'Питомец'} · ${variantById.get(item.variantId)?.service.publicName ?? 'Услуга'}\n  ${item.startsAt.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Moscow' })} · ${item.state}${payment}`; }).join('\n')}` : 'Записей пока нет.', [[{ text: '🗓 Новая запись', callback_data: 'bot:booking' }], [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return;
+  }
+  const conversation = await botConversation(telegramUserId);
+  if (!conversation) { await say(chatId, 'Выбор времени истёк. Начнём заново.', [[{ text: 'Главное меню', callback_data: 'bot:menu' }]]); return; }
+  const petMatch = command.match(/^bot:pet:([0-9a-f-]{36})$/i);
+  if (petMatch && ['BOOKING_PET', 'CONSULTATION_PET'].includes(conversation.state)) {
+    const relation = await db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: petMatch[1] } }); if (!relation) return;
+    await showBotServices(chatId, telegramUserId, conversation.state === 'CONSULTATION_PET', { ...conversation.values, petId: relation.petId }); return;
+  }
+  const serviceMatch = command.match(/^bot:service:([0-9a-f-]{36})$/i);
+  if (serviceMatch && ['BOOKING_SERVICE', 'CONSULTATION_SERVICE'].includes(conversation.state)) {
+    const location = await db.location.findFirst({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } });
+    if (!location) { await say(chatId, 'Пока нет доступной площадки для записи. Свяжитесь с командой VetSvet.'); return; }
+    const consultation = conversation.state === 'CONSULTATION_SERVICE'; await showBotDays(chatId, telegramUserId, consultation ? 'CONSULTATION_DAY' : 'BOOKING_DAY', { ...conversation.values, variantId: serviceMatch[1], locationId: location.id }); return;
+  }
+  const dayMatch = command.match(/^bot:day:(\d{4}-\d{2}-\d{2})$/);
+  if (dayMatch && ['BOOKING_DAY', 'CONSULTATION_DAY'].includes(conversation.state)) {
+    const slots = await availableBotSlots(conversation.values.locationId, conversation.values.variantId, dayMatch[1]);
+    if (!slots.length) { await say(chatId, 'На этот день свободных окон уже нет. Выберите другой.', [...botDays().map((day) => [{ text: botDayLabel(day), callback_data: `bot:day:${day}` }]), [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+    const state = conversation.state === 'CONSULTATION_DAY' ? 'CONSULTATION_SLOT' : 'BOOKING_SLOT'; await saveBotConversation(telegramUserId, chatId, state, { ...conversation.values, day: dayMatch[1] });
+    await say(chatId, `Свободные окна на ${botDayLabel(dayMatch[1])}:`, [...slots.map((slot) => [{ text: slot.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' }), callback_data: `bot:slot:${slot.valueOf()}` }]), [{ text: '← Выбрать другой день', callback_data: conversation.state === 'CONSULTATION_DAY' ? 'bot:consultation' : 'bot:booking' }]]); return;
+  }
+  const slotMatch = command.match(/^bot:slot:(\d{13})$/);
+  if (slotMatch && ['BOOKING_SLOT', 'CONSULTATION_SLOT'].includes(conversation.state)) {
+    const startsAt = new Date(Number(slotMatch[1])); const slots = await availableBotSlots(conversation.values.locationId, conversation.values.variantId, conversation.values.day);
+    if (!slots.some((slot) => slot.valueOf() === startsAt.valueOf())) { await say(chatId, 'Это окно только что заняли. Пожалуйста, выберите другое.', [[{ text: 'Выбрать заново', callback_data: conversation.state === 'CONSULTATION_SLOT' ? 'bot:consultation' : 'bot:booking' }]]); return; }
+    const values: BotData = { ...conversation.values, startsAt: startsAt.toISOString() };
+    if (conversation.state === 'CONSULTATION_SLOT') {
+      if (values.initialQuestion?.length >= 10) {
+        try { const result = await createBotConsultation(telegramUserId, chatId, values, values.initialQuestion); const admins = await adminChats(); await Promise.all(admins.map((admin) => say(admin.chatId, `Новая консультация из бота: ${result.pet.name}\n${values.initialQuestion.slice(0, 500)}`))); await say(chatId, `Консультация для ${result.pet.name} создана на ${startsAt.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Moscow' })}.\n\n${result.invoice.totalMinor > 0 ? `К оплате ${(result.invoice.totalMinor / 100).toLocaleString('ru-RU')} ₽ по СБП ${config.sbpPhone}. После перевода пришлите сюда скриншот.` : 'Оплата не требуется.'}`, [[{ text: 'Главное меню', callback_data: 'bot:menu' }]]); } catch (error) { await say(chatId, `Не удалось создать консультацию: ${(error as Error).message}. Начните заново.`, [[{ text: 'Начать заново', callback_data: 'bot:consultation' }]]); } return;
+      }
+      await saveBotConversation(telegramUserId, chatId, 'CONSULTATION_QUESTION', values); await say(chatId, 'Опишите одним сообщением, что беспокоит: когда началось, какие симптомы и что уже пробовали. Не отправляйте экстренные случаи — при ухудшении сразу обращайтесь за неотложной помощью.', [[{ text: 'Отмена', callback_data: 'bot:menu' }]]); return;
+    }
+    await saveBotConversation(telegramUserId, chatId, 'BOOKING_CONFIRM', values);
+    const [pet, variant] = await Promise.all([db.pet.findUnique({ where: { id: values.petId } }), db.serviceVariant.findUnique({ where: { id: values.variantId }, include: { service: true } })]);
+    await say(chatId, `Проверьте запись:\n\n${pet?.name ?? 'Питомец'} · ${variant?.service.publicName ?? 'Услуга'}\n${startsAt.toLocaleString('ru-RU', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Europe/Moscow' })}\n${variant?.priceMinor ? `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` : 'Стоимость уточнит команда'}`, [[{ text: '✓ Подтвердить запись', callback_data: 'bot:confirm' }], [{ text: 'Отмена', callback_data: 'bot:menu' }]]); return;
+  }
+  const speciesMatch = command.match(/^bot:species:(DOG|CAT|OTHER)$/);
+  if (speciesMatch && conversation.state === 'PET_SPECIES') {
+    const pet = await db.$transaction(async (tx) => { const created = await tx.pet.create({ data: { organizationId: config.organizationId, name: conversation.values.petName, species: speciesMatch[1], medicalAlerts: [] } }); await tx.ownerPetRelation.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: created.id, relation: 'OWNER', primary: true } }); return created; });
+    await saveBotConversation(telegramUserId, chatId, 'MENU'); await say(chatId, `${pet.name} добавлен в семью VetSvet.`, [[{ text: '🗓 Записать питомца', callback_data: 'bot:booking' }], [{ text: 'Главное меню', callback_data: 'bot:menu' }]]); return;
+  }
+  if (command === 'bot:confirm' && conversation.state === 'BOOKING_CONFIRM') {
+    try { const result = await createBotBooking(telegramUserId, chatId, conversation.values); const admins = await adminChats(); await Promise.all(admins.map((admin) => say(admin.chatId, `Новая запись из бота: ${result.pet.name} · ${result.variant.service.publicName} · ${result.appointment.startsAt.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Moscow' })}`))); const payment = result.invoice.totalMinor > 0 ? `\nК оплате ${(result.invoice.totalMinor / 100).toLocaleString('ru-RU')} ₽ по СБП ${config.sbpPhone}. После перевода пришлите сюда скриншот.` : ''; await say(chatId, `Готово — заявка на запись создана.\n\n${result.pet.name} · ${result.variant.service.publicName}\n${result.appointment.startsAt.toLocaleString('ru-RU', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Europe/Moscow' })}\nСтатус: ожидает подтверждения команды.${payment}`, [[{ text: 'Мои записи', callback_data: 'bot:appointments' }], [{ text: 'Главное меню', callback_data: 'bot:menu' }]]); } catch (error) { await say(chatId, (error as Error).message === 'SLOT_TAKEN' ? 'Это окно уже заняли. Выберите другое время.' : 'Не удалось создать запись. Данные изменились — начните выбор заново.', [[{ text: 'Выбрать время', callback_data: 'bot:booking' }]]); } return;
+  }
+  await say(chatId, 'Этот шаг уже неактуален. Откройте главное меню и начните заново.', [[{ text: 'Главное меню', callback_data: 'bot:menu' }]]);
 }
 
 async function handleUpdate(update: TgUpdate) {
@@ -275,31 +495,32 @@ async function handleUpdate(update: TgUpdate) {
   const callback = update.callback_query;
   if (callback?.message?.chat && callback.data) {
     const match = callback.data.match(/^payment:(approve|reject):([0-9a-f-]{36})$/i);
-    if (!match) return;
+    if (!match) { if (callback.data.startsWith('bot:')) await handleBotCallback(callback); return; }
     const admin = await adminFor(String(callback.message.chat.id), String(callback.from.id));
     if (!admin) { await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: 'Нет прав администратора.', show_alert: true }); return; }
     const proof = await db.telegramPaymentProof.findUnique({ where: { id: match[2] }, include: { consultation: true } });
     if (!proof || proof.state !== 'PENDING_REVIEW') { await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: 'Чек уже обработан.' }); return; }
     const approved = match[1] === 'approve';
-    const consultationInvoice = proof.consultation?.appointmentId ? await db.invoice.findUnique({ where: { appointmentId: proof.consultation.appointmentId } }) : undefined;
+    const paymentAppointmentId = proof.consultation?.appointmentId ?? proof.appointmentId;
+    const paymentInvoice = paymentAppointmentId ? await db.invoice.findUnique({ where: { appointmentId: paymentAppointmentId } }) : undefined;
     await db.$transaction(async (tx) => {
       await tx.telegramPaymentProof.update({ where: { id: proof.id }, data: { state: approved ? 'CONFIRMED' : 'REJECTED', reviewedAt: new Date(), reviewedByChatId: admin.chatId } });
       if (proof.requestId) await tx.telegramRequest.update({ where: { id: proof.requestId }, data: { state: approved ? 'READY' : 'WAITING_PAYMENT' } });
       if (proof.consultationId) await tx.consultation.update({ where: { id: proof.consultationId }, data: { paymentState: approved ? 'CONFIRMED' : 'AWAITING_PROOF', state: approved ? 'READY_FOR_SCHEDULING' : 'WAITING_PAYMENT' } });
-      if (consultationInvoice) {
+      if (paymentInvoice) {
         const paidAt = new Date();
         let confirmedPayment: { id: string; amountMinor: number } | undefined;
-        if (approved && consultationInvoice.totalMinor > 0) {
-          const payment = await tx.payment.create({ data: { organizationId: config.organizationId, invoiceId: consultationInvoice.id, provider: 'TELEGRAM_PROOF', providerTransactionId: proof.id, amountMinor: consultationInvoice.totalMinor, currency: consultationInvoice.currency, state: 'CONFIRMED', method: 'SBP_MANUAL_REVIEW', confirmedAt: paidAt } });
+        if (approved && paymentInvoice.totalMinor > 0) {
+          const payment = await tx.payment.create({ data: { organizationId: config.organizationId, invoiceId: paymentInvoice.id, provider: 'TELEGRAM_PROOF', providerTransactionId: proof.id, amountMinor: paymentInvoice.totalMinor, currency: paymentInvoice.currency, state: 'CONFIRMED', method: 'SBP_MANUAL_REVIEW', confirmedAt: paidAt } });
           confirmedPayment = payment;
-          await tx.fiscalReceipt.create({ data: { organizationId: config.organizationId, invoiceId: consultationInvoice.id, paymentId: payment.id, state: 'PENDING_PROVIDER', idempotencyKey: `telegram-proof:${proof.id}` } });
+          await tx.fiscalReceipt.create({ data: { organizationId: config.organizationId, invoiceId: paymentInvoice.id, paymentId: payment.id, state: 'PENDING_PROVIDER', idempotencyKey: `telegram-proof:${proof.id}` } });
         }
-        const updatedInvoice = await tx.invoice.update({ where: { id: consultationInvoice.id }, data: { state: approved ? 'PAID' : 'PENDING_PAYMENT_REVIEW', ...(approved ? { paidMinor: consultationInvoice.totalMinor } : {}) } });
+        const updatedInvoice = await tx.invoice.update({ where: { id: paymentInvoice.id }, data: { state: approved ? 'PAID' : 'PENDING_PAYMENT_REVIEW', ...(approved ? { paidMinor: paymentInvoice.totalMinor } : {}) } });
         if (confirmedPayment) await settleGrowthBenefits(tx, updatedInvoice, confirmedPayment, paidAt);
       }
     });
     await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: approved ? 'Оплата подтверждена.' : 'Оплата отклонена.' });
-    await say(proof.chatId, approved ? 'Оплата подтверждена. Мы получили запрос и скоро вернёмся с ответом.' : 'Чек пока не удалось подтвердить. Проверьте перевод и отправьте новый скриншот.');
+    await say(proof.chatId, approved ? 'Оплата подтверждена. Запись и счёт обновлены — статус всегда доступен в разделе «Мои записи».' : 'Чек пока не удалось подтвердить. Проверьте перевод и отправьте новый скриншот.');
     return;
   }
   if (!message?.from) return;
@@ -333,7 +554,8 @@ async function handleUpdate(update: TgUpdate) {
   const login = text.match(/^\/start\s+(?:l|login)_([0-9a-f-]{36})_([A-Za-z0-9_-]{16,})$/i);
   if (login) {
     const confirmed = await confirmTelegramLogin(login[1], login[2], telegramUserId, chatId, fullName);
-    await say(chatId, confirmed ? 'Готово. Вернитесь на сайт VetSvet — ваш личный профиль откроется автоматически.' : 'Эта ссылка недействительна, истекла или уже использована. Вернитесь на сайт и создайте новую.');
+    await say(chatId, confirmed ? 'Готово. Telegram подключён. Вернитесь на сайт — профиль откроется автоматически.' : 'Не удалось подключить Telegram. Если аккаунта ещё нет, сначала зарегистрируйтесь по логину и паролю, затем подключите Telegram из личного кабинета.');
+    if (confirmed) await showBotMenu(chatId, telegramUserId);
     return;
   }
   const claim = text.match(/^\/admin\s+(.+)$/);
@@ -362,36 +584,56 @@ async function handleUpdate(update: TgUpdate) {
     await say(chatId, `Приглашение для «${invite.fullName}» (${role}) готово на 7 дней.\n\n${config.publicUrl}/auth/?mode=staff&invite=${invite.id}.${secret}\n\nПередайте эту ссылку сотруднику лично.`);
     return;
   }
+  const conversation = await botConversation(telegramUserId);
+  if (conversation?.state === 'PET_NAME' && text && !text.startsWith('/')) {
+    const petName = text.trim();
+    if (petName.length < 1 || petName.length > 80) { await say(chatId, 'Имя должно содержать от 1 до 80 символов. Попробуйте ещё раз.'); return; }
+    await saveBotConversation(telegramUserId, chatId, 'PET_SPECIES', { petName });
+    await say(chatId, `Кто ${petName}?`, [[{ text: '🐕 Собака', callback_data: 'bot:species:DOG' }, { text: '🐈 Кошка', callback_data: 'bot:species:CAT' }], [{ text: '🐾 Другой питомец', callback_data: 'bot:species:OTHER' }], [{ text: 'Отмена', callback_data: 'bot:menu' }]]); return;
+  }
+  if (conversation?.state === 'CONSULTATION_QUESTION' && text && !text.startsWith('/')) {
+    if (text.length < 10 || text.length > 3000) { await say(chatId, 'Опишите вопрос подробнее — от 10 до 3000 символов.'); return; }
+    try {
+      const result = await createBotConsultation(telegramUserId, chatId, conversation.values, text);
+      const admins = await adminChats(); await Promise.all(admins.map((admin) => say(admin.chatId, `Новая консультация из бота: ${result.pet.name}\n${text.slice(0, 500)}`)));
+      await say(chatId, `Консультация для ${result.pet.name} создана на ${result.appointment.startsAt.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Moscow' })}.\n\n${result.invoice.totalMinor > 0 ? `К оплате ${(result.invoice.totalMinor / 100).toLocaleString('ru-RU')} ₽ по СБП ${config.sbpPhone}. После перевода пришлите сюда скриншот чека.` : 'Оплата не требуется.'}`, [[{ text: 'Мои записи', callback_data: 'bot:appointments' }], [{ text: 'Главное меню', callback_data: 'bot:menu' }]]);
+    } catch (error) { await say(chatId, `Не удалось создать консультацию: ${(error as Error).message}.`, [[{ text: 'Начать заново', callback_data: 'bot:consultation' }]]); }
+    return;
+  }
   if (text === '/start' || text === '/menu') {
-    await say(chatId, 'VetSvet — забота рядом.\n\n/booking дата и пожелание — записаться\n/consultation вопрос — консультация\n/payment — как оплатить\n/emergency — срочная помощь\n\nДля команды: /invite РОЛЬ Имя (только администратор).');
+    await showBotMenu(chatId, telegramUserId);
     return;
   }
   if (text.startsWith('/booking')) {
-    const request = await db.telegramRequest.create({ data: { telegramUserId, chatId, kind: 'APPOINTMENT', message: text.slice(8).trim() || 'Хочу записаться', state: 'NEW' } });
-    const admins = await adminChats();
-    await Promise.all(admins.map((admin) => say(admin.chatId, `Новая заявка на запись #${request.id.slice(0, 8)}\n${request.message}`)));
-    await say(chatId, 'Заявка на запись принята. Команда уточнит свободное время и подтвердит её здесь.');
+    await showBotPets(chatId, telegramUserId, 'BOOKING');
     return;
   }
   if (text.startsWith('/consultation')) {
-    const request = await db.telegramRequest.create({ data: { telegramUserId, chatId, kind: 'CONSULTATION', message: text.slice(13).trim() || 'Нужна консультация', state: 'WAITING_PAYMENT' } });
-    await say(chatId, `Запрос консультации #${request.id.slice(0, 8)} создан.\n\nПереведите согласованную с клиникой сумму по СБП на ${config.sbpPhone}, затем пришлите сюда скриншот чека — его подтвердит администратор.`);
+    const initialQuestion = text.slice(13).trim(); await showBotPets(chatId, telegramUserId, 'CONSULTATION', initialQuestion.length >= 10 ? { initialQuestion } : {});
     return;
   }
+  if (text === '/profile' || text === '/pets') { await showBotPets(chatId, telegramUserId, 'PROFILE'); return; }
+  if (text === '/appointments') { await handleBotCallback({ id: `command-${update.update_id}`, data: 'bot:appointments', from: message.from, message: { chat: message.chat } }); return; }
   if (text === '/payment') { await say(chatId, `Оплата консультации: перевод по СБП на ${config.sbpPhone}. После перевода отправьте сюда скриншот чека — его подтвердит администратор.`); return; }
   if (text === '/emergency') { await say(chatId, 'Если питомцу плохо прямо сейчас, не ждите ответа в чате: позвоните в клинику или обратитесь в ближайшую круглосуточную ветеринарную помощь.'); return; }
   if (message.photo?.length) {
     const consultation = await db.consultation.findFirst({ where: { organizationId: config.organizationId, telegramUserId, telegramChatId: chatId, state: { in: ['PAYMENT_LINKED', 'WAITING_PAYMENT'] }, paymentState: 'AWAITING_PROOF' }, orderBy: { createdAt: 'desc' } });
     const request = consultation ? undefined : await db.telegramRequest.findFirst({ where: { telegramUserId, state: 'WAITING_PAYMENT' }, orderBy: { createdAt: 'desc' } });
-    const proof = await db.telegramPaymentProof.create({ data: { requestId: request?.id, consultationId: consultation?.id, telegramUserId, chatId, sourceMessageId: message.message_id, purpose: consultation || request ? 'CONSULTATION' : 'APPOINTMENT', state: 'PENDING_REVIEW' } });
+    const account = consultation || request ? undefined : await botAccount(telegramUserId);
+    const unpaidInvoice = account ? await db.invoice.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: { not: null }, state: { in: ['ISSUED', 'PENDING_PAYMENT_REVIEW'] }, totalMinor: { gt: 0 } }, orderBy: { createdAt: 'desc' } }) : undefined;
+    if (!consultation && !request && !unpaidInvoice?.appointmentId) { await say(chatId, 'Не нашёл запись, ожидающую оплату. Откройте «Мои записи» или создайте новую запись, затем отправьте чек ещё раз.', [[{ text: 'Мои записи', callback_data: 'bot:appointments' }]]); return; }
+    const proof = await db.telegramPaymentProof.create({ data: { requestId: request?.id, consultationId: consultation?.id, appointmentId: unpaidInvoice?.appointmentId, telegramUserId, chatId, sourceMessageId: message.message_id, purpose: consultation || request ? 'CONSULTATION' : 'APPOINTMENT', state: 'PENDING_REVIEW' } });
     if (consultation) await db.consultation.update({ where: { id: consultation.id }, data: { paymentState: 'PENDING_REVIEW', state: 'PAYMENT_REVIEW' } });
+    if (unpaidInvoice) await db.invoice.update({ where: { id: unpaidInvoice.id }, data: { state: 'PENDING_PAYMENT_REVIEW' } });
     const admins = await adminChats();
     await Promise.all(admins.flatMap((admin) => [
       telegram('forwardMessage', { chat_id: admin.chatId, from_chat_id: chatId, message_id: message.message_id }),
       say(admin.chatId, `Чек #${proof.id.slice(0, 8)} — подтвердить перевод?`, [[{ text: '✓ Подтвердить', callback_data: `payment:approve:${proof.id}` }, { text: '✕ Отклонить', callback_data: `payment:reject:${proof.id}` }]])
     ]));
     await say(chatId, 'Чек получен и отправлен администратору на проверку.');
+    return;
   }
+  if (text) await say(chatId, 'Я помогу записаться, выбрать консультацию, проверить записи или добавить питомца. Откройте меню ниже.', [[{ text: 'Открыть меню', callback_data: 'bot:menu' }]]);
 }
 
 async function startTelegramLogin(request: IncomingMessage, response: ServerResponse) {
@@ -413,6 +655,14 @@ async function startTelegramLogin(request: IncomingMessage, response: ServerResp
   json(response, 201, { requestId: record.id, expiresAt, telegramUrl: `https://t.me/${config.botUsername}?start=l_${record.id}_${secret}` });
 }
 
+async function startTelegramLink(request: IncomingMessage, response: ServerResponse) {
+  const current = await session(request); if (!current) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+  if (current.user.telegramUserId) { json(response, 409, { error: 'TELEGRAM_ALREADY_LINKED', message: 'Telegram уже подключён к этому аккаунту.' }); return; }
+  const secret = randomBytes(16).toString('base64url'); const expiresAt = new Date(Date.now() + 600000);
+  const record = await db.telegramLoginRequest.create({ data: { tokenHash: digest(secret), mode: current.mode, targetUserId: current.userId, expiresAt } });
+  json(response, 201, { requestId: record.id, expiresAt, telegramUrl: `https://t.me/${config.botUsername}?start=l_${record.id}_${secret}` });
+}
+
 async function passwordRegister(request: IncomingMessage, response: ServerResponse) {
   let input: { login?: string; password?: string; fullName?: string; mode?: string; invite?: string } = {};
   try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
@@ -430,20 +680,21 @@ async function passwordRegister(request: IncomingMessage, response: ServerRespon
     if (!parsed || !record || record.state !== 'PENDING' || record.expiresAt <= new Date() || !sameSecret(record.tokenHash, digest(parsed.token))) { json(response, 403, { error: 'INVITE_REQUIRED', message: 'Для регистрации сотрудника нужна действующая персональная ссылка.' }); return; }
     invite = { id: record.id, role: record.role };
   }
-  const user = await db.userIdentity.create({ data: { login, passwordHash: await passwordHash(input.password!), passwordUpdatedAt: new Date() } });
-  if (mode === 'STAFF' && invite) {
-    await db.$transaction([
-      db.staffInvite.update({ where: { id: invite.id }, data: { state: 'ACCEPTED', acceptedAt: new Date(), acceptedByUserId: user.id } }),
-      db.staffMembership.create({ data: { organizationId: config.organizationId, userId: user.id, role: invite.role, state: 'ACTIVE' } }),
-      db.staffProfile.create({ data: { organizationId: config.organizationId, userId: user.id, employmentState: 'ACTIVE', specialties: [], locationIds: [] } })
-    ]);
-    await createPasswordSession(response, user.id, 'STAFF');
-    json(response, 201, { account: { mode: 'STAFF' }, redirectTo: '/staff/' });
-    return;
-  }
-  await db.owner.create({ data: { organizationId: config.organizationId, userId: user.id, fullName } });
-  await createPasswordSession(response, user.id, 'CLIENT');
-  json(response, 201, { account: { mode: 'CLIENT' }, redirectTo: '/client/' });
+  const encodedPassword = await passwordHash(input.password!);
+  const user = await db.$transaction(async (tx) => {
+    const created = await tx.userIdentity.create({ data: { login, passwordHash: encodedPassword, passwordUpdatedAt: new Date() } });
+    if (mode === 'STAFF' && invite) {
+      const accepted = await tx.staffInvite.updateMany({ where: { id: invite.id, state: 'PENDING', expiresAt: { gt: new Date() } }, data: { state: 'ACCEPTED', acceptedAt: new Date(), acceptedByUserId: created.id } });
+      if (accepted.count !== 1) throw new Error('INVITE_ALREADY_USED');
+      await tx.staffMembership.create({ data: { organizationId: config.organizationId, userId: created.id, role: invite.role, state: 'ACTIVE' } });
+      await tx.staffProfile.create({ data: { organizationId: config.organizationId, userId: created.id, employmentState: 'ACTIVE', specialties: [], locationIds: [] } });
+    } else {
+      await tx.owner.create({ data: { organizationId: config.organizationId, userId: created.id, fullName } });
+    }
+    return created;
+  });
+  await createPasswordSession(response, user.id, mode);
+  json(response, 201, { account: { mode }, redirectTo: mode === 'STAFF' ? '/staff/' : '/client/' });
 }
 
 async function passwordLogin(request: IncomingMessage, response: ServerResponse) {
@@ -489,6 +740,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/auth/password/login') { await passwordLogin(request, response); return; }
     if (request.method === 'POST' && url.pathname === '/api/auth/password/set') { await setPassword(request, response); return; }
     if (request.method === 'POST' && url.pathname === '/api/auth/telegram/start') { await startTelegramLogin(request, response); return; }
+    if (request.method === 'POST' && url.pathname === '/api/v1/auth/telegram/link/start') { await startTelegramLink(request, response); return; }
     if (request.method === 'GET' && url.pathname === '/api/auth/telegram/status') {
       const id = url.searchParams.get('requestId') ?? '';
       const record = await db.telegramLoginRequest.findUnique({ where: { id } });
@@ -511,11 +763,11 @@ const server = createServer(async (request, response) => {
       if (current.mode === 'STAFF') {
         const membership = await db.staffMembership.findUnique({ where: { organizationId_userId: { organizationId: config.organizationId, userId: current.userId } } });
         if (!membership || membership.state !== 'ACTIVE') { json(response, 403, { error: 'FORBIDDEN' }); return; }
-        json(response, 200, { account: { mode: 'STAFF', userId: current.userId, organizationId: config.organizationId, role: membership.role } });
+        json(response, 200, { account: { mode: 'STAFF', userId: current.userId, organizationId: config.organizationId, role: membership.role, telegramLinked: Boolean(current.user.telegramUserId) } });
         return;
       }
       const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: current.userId }, { telegramUserId: current.user.telegramUserId ?? undefined }] } });
-      json(response, 200, { account: { mode: 'CLIENT', userId: current.userId, organizationId: config.organizationId, owner } });
+      json(response, 200, { account: { mode: 'CLIENT', userId: current.userId, organizationId: config.organizationId, telegramLinked: Boolean(current.user.telegramUserId), owner } });
       return;
     }
     const dashboard = url.pathname.match(/^\/api\/v1\/client\/owners\/([^/]+)\/dashboard$/);
@@ -1518,4 +1770,4 @@ const server = createServer(async (request, response) => {
   } catch (error) { console.error(error); json(response, 500, { error: 'INTERNAL_ERROR' }); }
 });
 
-ensureOrganization().then(ensureBookingFoundation).then(ensureDocumentFoundation).then(ensureGrowthFoundation).then(() => server.listen(config.port, '127.0.0.1', () => console.log(`VetSvet production server on ${config.port}`))).catch((error) => { console.error(error); process.exit(1); });
+ensureOrganization().then(ensureBookingFoundation).then(ensureDocumentFoundation).then(ensureGrowthFoundation).then(() => server.listen(config.port, '127.0.0.1', () => { console.log(`VetSvet production server on ${config.port}`); ensureBotCommandMenu().catch((error) => console.error('Telegram menu setup failed.', error)); })).catch((error) => { console.error(error); process.exit(1); });

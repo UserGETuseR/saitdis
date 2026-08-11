@@ -47,6 +47,8 @@ model Location {
   name           String
   timezone       String
   active         Boolean         @default(true)
+  bookingCapacity Int            @default(3)
+  workingHours    Json           @default("{}")
   organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   equipment      Equipment[]
   hospitalBeds   HospitalBed[]
@@ -104,6 +106,7 @@ model TelegramLoginRequest {
   state          String    @default("PENDING")
   mode           String    @default("CLIENT")
   staffInviteId  String?
+  targetUserId   String?
   telegramUserId String?
   chatId         String?
   expiresAt      DateTime
@@ -114,6 +117,22 @@ model TelegramLoginRequest {
   @@index([state, expiresAt])
   @@index([telegramUserId])
   @@index([staffInviteId, state])
+  @@index([targetUserId, state])
+}
+
+model TelegramConversation {
+  id             String   @id @default(uuid())
+  organizationId String
+  telegramUserId String
+  chatId         String
+  state          String
+  data           Json     @default("{}")
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, telegramUserId])
+  @@index([organizationId, state, expiresAt])
 }
 
 model StaffInvite {
@@ -170,6 +189,7 @@ model TelegramPaymentProof {
   id               String           @id @default(uuid())
   requestId        String?          @unique
   consultationId   String?          @unique
+  appointmentId    String?          @unique
   telegramUserId   String
   chatId           String
   sourceMessageId  Int
@@ -181,6 +201,7 @@ model TelegramPaymentProof {
   createdAt        DateTime         @default(now())
   request          TelegramRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
   consultation     Consultation?    @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  appointment      Appointment?     @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
 
   @@index([state, createdAt])
   @@index([telegramUserId, chatId])
@@ -325,6 +346,7 @@ model Appointment {
   consultation    Consultation?
   encounter       Encounter?
   hospitalization Hospitalization?
+  paymentProof    TelegramPaymentProof?
 
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
