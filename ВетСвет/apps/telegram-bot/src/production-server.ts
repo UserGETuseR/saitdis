@@ -1,7 +1,8 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { PrismaClient } from '@prisma/client';
 
 type AuthMode = 'CLIENT' | 'STAFF';
@@ -34,6 +35,7 @@ const staffRoot = resolve(root, 'apps', 'staff-web');
 const authRoot = resolve(root, 'apps', 'auth-web');
 const photoRoot = resolve(root, 'Photo');
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+const scrypt = promisify(scryptCallback);
 const sameSecret = (left: string, right: string) => {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -44,6 +46,7 @@ const mime: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json'
 };
 const staffRoles = new Set(['ADMIN', 'MANAGER', 'VETERINARIAN', 'GROOMER', 'ASSISTANT', 'RECEPTIONIST']);
+const loginPattern = /^[a-z0-9][a-z0-9_.-]{2,31}$/;
 
 async function body(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -55,6 +58,7 @@ function json(response: ServerResponse, status: number, payload: unknown) {
   response.end(JSON.stringify(payload));
 }
 function redirect(response: ServerResponse, location: string) { response.writeHead(302, { location }); response.end(); }
+function setSession(response: ServerResponse, token: string) { response.setHeader('set-cookie', `vetsvet_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`); }
 function cookie(request: IncomingMessage, name: string) {
   return request.headers.cookie?.split(';').map((value) => value.trim()).find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1);
 }
@@ -83,7 +87,8 @@ async function ensureOrganization() {
   await db.organization.upsert({ where: { id: config.organizationId }, update: {}, create: { id: config.organizationId, legalName: 'VetSvet', displayName: 'ВетСвет' } });
 }
 async function ownerFor(telegramUserId: string, fullName: string) {
-  return db.owner.upsert({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, update: { fullName }, create: { organizationId: config.organizationId, telegramUserId, fullName } });
+  const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
+  return db.owner.upsert({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, update: { fullName, userId: user.id }, create: { organizationId: config.organizationId, userId: user.id, telegramUserId, fullName } });
 }
 async function adminFor(chatId: string, telegramUserId: string) {
   return db.telegramAdminChat.findFirst({ where: { chatId, telegramUserId } });
@@ -96,6 +101,11 @@ function parseInvite(value: unknown) {
   const [id, token, extra] = String(value ?? '').split('.');
   return !extra && /^[0-9a-f-]{36}$/i.test(id ?? '') && /^[A-Za-z0-9_-]{16,}$/i.test(token ?? '') ? { id, token } : undefined;
 }
+function normalizeLogin(value: unknown) { return String(value ?? '').trim().toLowerCase(); }
+function validPassword(value: unknown) { return typeof value === 'string' && value.length >= 10 && value.length <= 128; }
+async function passwordHash(password: string) { const salt = randomBytes(16).toString('hex'); const derived = await scrypt(password, salt, 64); return `scrypt$${salt}$${Buffer.from(derived).toString('hex')}`; }
+async function passwordMatches(password: string, encoded: string | null) { const [algorithm, salt, expected] = encoded?.split('$') ?? []; if (algorithm !== 'scrypt' || !salt || !expected) return false; const actual = Buffer.from(await scrypt(password, salt, 64)).toString('hex'); return sameSecret(actual, expected); }
+async function createPasswordSession(response: ServerResponse, userId: string, mode: AuthMode) { const token = randomBytes(32).toString('base64url'); await db.authSession.create({ data: { userId, tokenHash: digest(token), mode, state: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400000) } }); setSession(response, token); }
 
 async function confirmTelegramLogin(recordId: string, secret: string, telegramUserId: string, chatId: string, fullName: string) {
   const record = await db.telegramLoginRequest.findUnique({ where: { id: recordId } });
@@ -228,6 +238,70 @@ async function startTelegramLogin(request: IncomingMessage, response: ServerResp
   json(response, 201, { requestId: record.id, expiresAt, telegramUrl: `https://t.me/${config.botUsername}?start=l_${record.id}_${secret}` });
 }
 
+async function passwordRegister(request: IncomingMessage, response: ServerResponse) {
+  let input: { login?: string; password?: string; fullName?: string; mode?: string; invite?: string } = {};
+  try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+  const login = normalizeLogin(input.login);
+  const fullName = String(input.fullName ?? '').trim();
+  if (!loginPattern.test(login)) { json(response, 400, { error: 'INVALID_LOGIN', message: 'Логин: 3–32 символа, латинские буквы, цифры, точка, дефис или подчёркивание.' }); return; }
+  if (!validPassword(input.password)) { json(response, 400, { error: 'WEAK_PASSWORD', message: 'Пароль должен содержать от 10 до 128 символов.' }); return; }
+  if (fullName.length < 2 || fullName.length > 120) { json(response, 400, { error: 'INVALID_NAME', message: 'Укажите имя для профиля.' }); return; }
+  if (await db.userIdentity.findUnique({ where: { login } })) { json(response, 409, { error: 'LOGIN_TAKEN', message: 'Этот логин уже занят.' }); return; }
+  const mode: AuthMode = input.mode === 'STAFF' ? 'STAFF' : 'CLIENT';
+  let invite: { id: string; role: string } | undefined;
+  if (mode === 'STAFF') {
+    const parsed = parseInvite(input.invite);
+    const record = parsed ? await db.staffInvite.findUnique({ where: { id: parsed.id } }) : undefined;
+    if (!parsed || !record || record.state !== 'PENDING' || record.expiresAt <= new Date() || !sameSecret(record.tokenHash, digest(parsed.token))) { json(response, 403, { error: 'INVITE_REQUIRED', message: 'Для регистрации сотрудника нужна действующая персональная ссылка.' }); return; }
+    invite = { id: record.id, role: record.role };
+  }
+  const user = await db.userIdentity.create({ data: { login, passwordHash: await passwordHash(input.password!), passwordUpdatedAt: new Date() } });
+  if (mode === 'STAFF' && invite) {
+    await db.$transaction([
+      db.staffInvite.update({ where: { id: invite.id }, data: { state: 'ACCEPTED', acceptedAt: new Date(), acceptedByUserId: user.id } }),
+      db.staffMembership.create({ data: { organizationId: config.organizationId, userId: user.id, role: invite.role, state: 'ACTIVE' } }),
+      db.staffProfile.create({ data: { organizationId: config.organizationId, userId: user.id, employmentState: 'ACTIVE', specialties: [], locationIds: [] } })
+    ]);
+    await createPasswordSession(response, user.id, 'STAFF');
+    json(response, 201, { account: { mode: 'STAFF' }, redirectTo: '/staff/' });
+    return;
+  }
+  await db.owner.create({ data: { organizationId: config.organizationId, userId: user.id, fullName } });
+  await createPasswordSession(response, user.id, 'CLIENT');
+  json(response, 201, { account: { mode: 'CLIENT' }, redirectTo: '/client/' });
+}
+
+async function passwordLogin(request: IncomingMessage, response: ServerResponse) {
+  let input: { login?: string; password?: string; mode?: string } = {};
+  try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+  const login = normalizeLogin(input.login);
+  const mode: AuthMode = input.mode === 'STAFF' ? 'STAFF' : 'CLIENT';
+  const user = loginPattern.test(login) ? await db.userIdentity.findUnique({ where: { login } }) : undefined;
+  if (!user || !validPassword(input.password) || !await passwordMatches(input.password, user.passwordHash)) { json(response, 401, { error: 'INVALID_CREDENTIALS', message: 'Неверный логин или пароль.' }); return; }
+  if (mode === 'STAFF') {
+    const membership = await db.staffMembership.findUnique({ where: { organizationId_userId: { organizationId: config.organizationId, userId: user.id } } });
+    if (!membership || membership.state !== 'ACTIVE') { json(response, 403, { error: 'STAFF_ACCESS_REQUIRED', message: 'Этот аккаунт не подключён к команде VetSvet.' }); return; }
+  } else if (!await db.owner.findFirst({ where: { organizationId: config.organizationId, userId: user.id } })) {
+    json(response, 403, { error: 'CLIENT_ACCESS_REQUIRED', message: 'Этот аккаунт не является личным кабинетом владельца.' }); return;
+  }
+  await createPasswordSession(response, user.id, mode);
+  json(response, 200, { account: { mode }, redirectTo: mode === 'STAFF' ? '/staff/' : '/client/' });
+}
+
+async function setPassword(request: IncomingMessage, response: ServerResponse) {
+  const current = await session(request);
+  if (!current) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+  let input: { login?: string; password?: string } = {};
+  try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+  const login = normalizeLogin(input.login);
+  if (!loginPattern.test(login)) { json(response, 400, { error: 'INVALID_LOGIN' }); return; }
+  if (!validPassword(input.password)) { json(response, 400, { error: 'WEAK_PASSWORD' }); return; }
+  const owner = await db.userIdentity.findUnique({ where: { login } });
+  if (owner && owner.id !== current.userId) { json(response, 409, { error: 'LOGIN_TAKEN' }); return; }
+  await db.userIdentity.update({ where: { id: current.userId }, data: { login, passwordHash: await passwordHash(input.password!), passwordUpdatedAt: new Date() } });
+  json(response, 200, { ok: true });
+}
+
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', config.publicUrl);
   try {
@@ -236,6 +310,9 @@ const server = createServer(async (request, response) => {
       if (request.headers['x-telegram-bot-api-secret-token'] !== config.webhookSecret) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       await handleUpdate(JSON.parse(await body(request)) as TgUpdate); json(response, 200, { ok: true }); return;
     }
+    if (request.method === 'POST' && url.pathname === '/api/auth/password/register') { await passwordRegister(request, response); return; }
+    if (request.method === 'POST' && url.pathname === '/api/auth/password/login') { await passwordLogin(request, response); return; }
+    if (request.method === 'POST' && url.pathname === '/api/auth/password/set') { await setPassword(request, response); return; }
     if (request.method === 'POST' && url.pathname === '/api/auth/telegram/start') { await startTelegramLogin(request, response); return; }
     if (request.method === 'GET' && url.pathname === '/api/auth/telegram/status') {
       const id = url.searchParams.get('requestId') ?? '';
@@ -249,7 +326,7 @@ const server = createServer(async (request, response) => {
         db.authSession.create({ data: { userId: user.id, tokenHash: digest(token), mode: record.mode, state: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400000) } }),
         db.telegramLoginRequest.update({ where: { id }, data: { state: 'CONSUMED', consumedAt: new Date() } })
       ]);
-      response.setHeader('set-cookie', `vetsvet_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`);
+      setSession(response, token);
       json(response, 200, { state: 'AUTHENTICATED', redirectTo: record.mode === 'STAFF' ? '/staff/' : '/client/' });
       return;
     }
@@ -262,7 +339,7 @@ const server = createServer(async (request, response) => {
         json(response, 200, { account: { mode: 'STAFF', userId: current.userId, organizationId: config.organizationId, role: membership.role } });
         return;
       }
-      const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, telegramUserId: current.user.telegramUserId ?? undefined } });
+      const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: current.userId }, { telegramUserId: current.user.telegramUserId ?? undefined }] } });
       json(response, 200, { account: { mode: 'CLIENT', userId: current.userId, organizationId: config.organizationId, owner } });
       return;
     }
@@ -270,7 +347,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && dashboard) {
       const current = await session(request);
       if (!current || current.mode !== 'CLIENT') { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
-      const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, telegramUserId: current.user.telegramUserId ?? undefined } });
+      const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: current.userId }, { telegramUserId: current.user.telegramUserId ?? undefined }] } });
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       const pets = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
       json(response, 200, { owner: { id: owner.id, fullName: owner.fullName }, pets: pets.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, appointments: [], careTasks: [], timeline: [] })) });

@@ -49,12 +49,16 @@ model Location {
 
 model UserIdentity {
   id             String            @id @default(uuid())
+  login          String?           @unique
   phone          String?           @unique
   email          String?           @unique
   telegramUserId String?           @unique
+  passwordHash   String?
+  passwordUpdatedAt DateTime?
   createdAt      DateTime          @default(now())
   memberships    StaffMembership[]
   sessions       AuthSession[]
+  owners         Owner[]
 }
 
 model AuthOtpChallenge {
@@ -179,12 +183,14 @@ model StaffMembership {
 model Owner {
   id             String       @id @default(uuid())
   organizationId String
+  userId         String?
   fullName       String
   phone          String?
   email          String?
   telegramUserId String?
   createdAt      DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           UserIdentity? @relation(fields: [userId], references: [id], onDelete: Restrict)
   relations      OwnerPetRelation[]
   invoices       Invoice[]
   consents       Consent[]
@@ -192,6 +198,7 @@ model Owner {
   dentalCharts   DentalChart[]
   @@index([organizationId, phone])
   @@unique([organizationId, telegramUserId])
+  @@unique([organizationId, userId])
 }
 
 model Pet {
