@@ -207,7 +207,17 @@ model Owner {
   phone            String?
   email            String?
   telegramUserId   String?
+  preferredChannel String             @default("TELEGRAM")
+  address          String?
+  emergencyContact String?
+  marketingConsent Boolean            @default(false)
+  accountStatus    String             @default("ACTIVE")
+  tags             Json               @default("[]")
+  source           String?
+  utm              Json               @default("{}")
+  notes            String?
   createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @default(now()) @updatedAt
   organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user             UserIdentity?      @relation(fields: [userId], references: [id], onDelete: Restrict)
   relations        OwnerPetRelation[]
@@ -228,9 +238,23 @@ model Pet {
   organizationId   String
   name             String
   species          String
+  breed            String?
+  sex              String?
+  neuterState      String?
+  birthDate        DateTime?
+  color            String?
+  microchip        String?
+  passportId       String?
   lifecycle        String             @default("ACTIVE")
   medicalAlerts    Json?
+  chronicConditions Json              @default("[]")
+  behavioralAlerts Json               @default("[]")
+  feedingNotes      String?
+  medicationNotes   String?
+  vaccinationDueAt DateTime?
+  primaryVeterinarianId String?
   createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @default(now()) @updatedAt
   organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   relations        OwnerPetRelation[]
   cases            ClinicalCase[]
@@ -646,15 +670,44 @@ model OperationalTask {
   id             String    @id @default(uuid())
   organizationId String
   title          String
+  kind           String    @default("GENERAL")
   priority       String
   state          String
   assigneeId     String?
+  ownerId        String?
+  petId          String?
+  dueAt          DateTime?
+  details        String?
   relatedType    String?
   relatedId      String?
+  idempotencyKey String?   @unique
   createdAt      DateTime  @default(now())
   completedAt    DateTime?
 
   @@index([organizationId, state, priority])
+  @@index([organizationId, ownerId, state, dueAt])
+  @@index([organizationId, petId, state, dueAt])
+}
+
+model CommunicationLog {
+  id               String   @id @default(uuid())
+  organizationId   String
+  ownerId           String
+  petId             String?
+  channel           String
+  direction         String
+  kind              String
+  subject           String?
+  body              String
+  state             String   @default("LOGGED")
+  staffId           String?
+  externalMessageId String?
+  idempotencyKey    String?  @unique
+  createdAt         DateTime @default(now())
+
+  @@index([organizationId, ownerId, createdAt])
+  @@index([organizationId, petId, createdAt])
+  @@index([organizationId, channel, state, createdAt])
 }
 
 model Incident {
