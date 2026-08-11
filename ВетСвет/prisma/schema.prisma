@@ -275,6 +275,7 @@ model Appointment {
   state          String
   createdAt      DateTime @default(now())
   consultation   Consultation?
+  encounter      Encounter?
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
 }
@@ -353,6 +354,7 @@ model Encounter {
   id             String       @id @default(uuid())
   organizationId String
   caseId         String
+  appointmentId  String?      @unique
   petId          String
   version        Int
   state          String
@@ -364,6 +366,7 @@ model Encounter {
   finalizedAt    DateTime?
   amendmentOfId  String?
   clinicalCase   ClinicalCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
   prescriptions  Prescription[]
   @@unique([caseId, version])
   @@index([organizationId, petId])
