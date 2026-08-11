@@ -632,10 +632,17 @@ model ServicePackage {
   id             String           @id @default(uuid())
   organizationId String
   name           String
+  description    String?
   credits        Int
+  priceMinor     Int              @default(0)
+  currency       String           @default("RUB")
+  validityDays   Int              @default(365)
+  familyShared   Boolean          @default(false)
+  benefits       Json             @default("{}")
   state          String
   serviceIds     Json
   createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @default(now()) @updatedAt
   balances       PackageBalance[]
 
   @@index([organizationId, state])
@@ -647,12 +654,49 @@ model PackageBalance {
   ownerId          String
   petId            String?
   packageId        String
+  invoiceId        String?
+  initialCredits   Int            @default(0)
   remainingCredits Int
+  state            String         @default("PENDING_PAYMENT")
   purchasedAt      DateTime       @default(now())
+  activatedAt      DateTime?
   expiresAt        DateTime?
+  idempotencyKey   String?        @unique
   servicePackage   ServicePackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  usages           PackageUsage[]
 
   @@index([organizationId, ownerId])
+  @@index([organizationId, state, expiresAt])
+}
+
+model PackageUsage {
+  id             String         @id @default(uuid())
+  organizationId String
+  balanceId      String
+  appointmentId  String         @unique
+  variantId      String
+  creditsUsed    Int            @default(1)
+  usedBy         String
+  usedAt         DateTime       @default(now())
+  balance        PackageBalance @relation(fields: [balanceId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, balanceId, usedAt])
+}
+
+model LoyaltyPolicy {
+  id                 String   @id @default(uuid())
+  organizationId     String
+  name               String
+  pointsPer100Rubles Int      @default(1)
+  rublesPerPoint     Int      @default(1)
+  tiers              Json     @default("[]")
+  state              String   @default("ACTIVE")
+  version            Int      @default(1)
+  effectiveAt        DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  @@unique([organizationId, version])
+  @@index([organizationId, state, effectiveAt])
 }
 
 model LoyaltyLedgerEntry {
@@ -660,10 +704,56 @@ model LoyaltyLedgerEntry {
   organizationId String
   ownerId        String
   pointsDelta    Int
+  balanceAfter   Int      @default(0)
   reason         String
+  referenceType  String?
+  referenceId    String?
+  idempotencyKey String?  @unique
   createdAt      DateTime @default(now())
 
   @@index([organizationId, ownerId, createdAt])
+  @@index([organizationId, referenceType, referenceId])
+}
+
+model MembershipPlan {
+  id                String            @id @default(uuid())
+  organizationId    String
+  name              String
+  description       String?
+  priceMinor        Int
+  currency          String            @default("RUB")
+  billingPeriodDays Int               @default(30)
+  benefits          Json              @default("{}")
+  serviceLimits     Json              @default("{}")
+  state             String            @default("ACTIVE")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @default(now()) @updatedAt
+  memberships       OwnerMembership[]
+
+  @@index([organizationId, state])
+}
+
+model OwnerMembership {
+  id                 String         @id @default(uuid())
+  organizationId     String
+  ownerId            String
+  planId             String
+  invoiceId          String?
+  state              String         @default("PENDING_PAYMENT")
+  autoRenew          Boolean        @default(false)
+  startedAt          DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  renewsAt           DateTime?
+  pausedAt           DateTime?
+  cancelledAt        DateTime?
+  idempotencyKey     String?        @unique
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @default(now()) @updatedAt
+  plan               MembershipPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, ownerId, state])
+  @@index([organizationId, renewsAt, state])
 }
 
 model OperationalTask {

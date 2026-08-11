@@ -35,11 +35,24 @@ async function renderClientExperience() {
   const hospitalizations = dashboard.hospitalizations ?? [];
   const invoices = dashboard.invoices ?? [];
   const documents = dashboard.documents ?? [];
+  const growth = dashboard.growth ?? { loyaltyPoints: 0, loyaltyHistory: [], packages: [], memberships: [] };
+  const activePackages = (growth.packages ?? []).filter((item) => item.state === 'ACTIVE' && item.remainingCredits > 0 && (!item.expiresAt || new Date(item.expiresAt) > new Date()));
+  const rebookable = pets.flatMap((pet) => (pet.appointments ?? []).filter((appointment) => ['COMPLETED', 'READY'].includes(appointment.state) && appointment.variantId && appointment.locationId).map((appointment) => ({ pet, appointment }))).slice(-8).reverse();
   const petName = new Map(pets.map((pet) => [pet.id, pet.name]));
   const section = document.createElement('section');
   section.id = 'client-experience';
   section.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px';
   section.innerHTML = `
+    <article class="timeline care-program" style="grid-column:1/-1;padding:5px 22px 18px;background:linear-gradient(135deg,#102f2d 0%,#07555a 58%,#123a36 100%);color:#fff;overflow:hidden;position:relative">
+      <div aria-hidden="true" style="position:absolute;width:240px;height:240px;border:1px solid #c6f8d755;border-radius:50%;right:-55px;top:-105px"></div>
+      <div class="timeline-head" style="border-color:#ffffff22;position:relative"><h2 style="color:#fff">Программа заботы</h2><span style="font-size:12px;color:#c6f8d7">${Number(growth.loyaltyPoints ?? 0).toLocaleString('ru-RU')} баллов</span></div>
+      <div class="care-program-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;padding-top:16px;position:relative">
+        <article style="padding:15px;border:1px solid #ffffff24;border-radius:16px;background:#ffffff0d"><small style="color:#c6f8d7">Баланс добрых визитов</small><strong style="display:block;font-size:34px;margin:7px 0">${Number(growth.loyaltyPoints ?? 0).toLocaleString('ru-RU')}</strong><span style="font-size:12px;color:#ffffffaa">Баллы начисляются после подтверждённой оплаты. Любая ручная корректировка остаётся в истории.</span></article>
+        <article style="padding:15px;border:1px solid #ffffff24;border-radius:16px;background:#ffffff0d"><small style="color:#c6f8d7">Пакеты</small>${activePackages.length ? activePackages.map((item) => `<div style="margin-top:9px"><b>${experienceEscape(item.name)}</b><div style="display:flex;justify-content:space-between;font-size:12px;color:#ffffffb5;margin-top:4px"><span>${item.remainingCredits} из ${item.initialCredits} визитов</span><span>${item.expiresAt ? `до ${new Date(item.expiresAt).toLocaleDateString('ru-RU')}` : 'без срока'}</span></div><div style="height:6px;margin-top:7px;border-radius:99px;background:#ffffff20;overflow:hidden"><i style="display:block;height:100%;width:${Math.max(0, Math.min(100, item.initialCredits ? item.remainingCredits / item.initialCredits * 100 : 0))}%;background:#c6f8d7"></i></div></div>`).join('') : '<p style="font-size:12px;color:#ffffffaa;line-height:1.5">Активный пакет появится здесь сразу после подтверждения оплаты.</p>'}</article>
+        <article style="padding:15px;border:1px solid #ffffff24;border-radius:16px;background:#ffffff0d"><small style="color:#c6f8d7">Membership</small>${(growth.memberships ?? []).length ? growth.memberships.map((item) => `<div style="margin-top:9px"><b>${experienceEscape(item.name)}</b><p style="margin:5px 0;color:#ffffffb5;font-size:12px">${experienceEscape(item.state)}${item.currentPeriodEnd ? ` · до ${new Date(item.currentPeriodEnd).toLocaleDateString('ru-RU')}` : ''}</p></div>`).join('') : '<p style="font-size:12px;color:#ffffffaa;line-height:1.5">Персональный план заботы объединит регулярные услуги и преимущества в одном месте.</p>'}</article>
+      </div>
+      ${rebookable.length ? `<div style="margin-top:14px;padding-top:13px;border-top:1px solid #ffffff22;position:relative"><small style="display:block;color:#c6f8d7;margin-bottom:8px">Повторить удачный визит</small><div style="display:flex;gap:8px;flex-wrap:wrap">${rebookable.map(({ pet, appointment }) => `<button type="button" class="button" data-rebook="${experienceEscape(appointment.id)}" style="min-height:38px;font-size:12px;background:#c6f8d7;color:#10211f">${experienceEscape(pet.name)} · ${experienceEscape(appointment.service)}</button>`).join('')}</div></div>` : ''}
+    </article>
     <article class="timeline" style="grid-column:auto;padding:5px 22px 18px">
       <div class="timeline-head"><h2>Консультация рядом</h2><span style="font-size:12px;color:var(--muted)">кабинет + Telegram</span></div>
       <p style="margin:14px 0;color:var(--muted);font-size:13px;line-height:1.5">Опишите вопрос спокойно и своими словами. После заявки VetSvet откроет личный маршрут оплаты, а подтверждённый ответ останется в кабинете.</p>
@@ -68,6 +81,28 @@ async function renderClientExperience() {
     ${timelineEvents.length ? `<article class="timeline memory-stream" style="grid-column:1/-1;padding:5px 22px 18px"><div class="timeline-head"><h2>Память заботы</h2><span style="font-size:12px;color:var(--muted)">единая история питомцев</span></div><div style="display:grid;gap:0;padding-top:12px">${timelineEvents.map(({ pet, event }) => `<article style="display:grid;grid-template-columns:96px 12px 1fr;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)"><time style="font-size:11px;color:var(--muted)">${new Date(event.occurredAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: '2-digit' })}</time><i style="width:9px;height:9px;margin-top:4px;border-radius:99px;background:${event.type === 'HEALTH' || event.type === 'HOSPITAL' ? '#07555a' : event.type === 'FINANCE' ? '#d6a955' : 'var(--mint)'};box-shadow:0 0 0 4px #e9efea"></i><div><b>${experienceEscape(pet.name)} · ${experienceEscape(event.title)}</b><p style="margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.45">${experienceEscape(event.detail)}</p></div></article>`).join('')}</div></article>` : ''}
     ${reports.length ? `<article class="timeline" style="grid-column:1/-1;padding:5px 22px 18px"><div class="timeline-head"><h2>Отчёты об уходе</h2><span style="font-size:12px;color:var(--muted)">важное остаётся с вами</span></div><div style="display:grid;gap:10px;padding:16px 0 0">${reports.map(({ pet, appointment }) => `<article style="padding:14px;border:1px solid var(--line);border-radius:14px;background:#fff"><p class="eyebrow" style="margin-bottom:8px">${experienceEscape(pet.name)} · ${experienceEscape(appointment.service)}</p><p style="margin:0;line-height:1.5">${experienceEscape(appointment.grooming.report)}</p><small style="display:block;margin-top:10px;color:var(--muted)">${appointment.grooming.completedAt ? new Date(appointment.grooming.completedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Отчёт готов'}</small></article>`).join('')}</div></article>` : ''}`;
   document.querySelector('.urgent')?.before(section);
+  const bookingForm = document.querySelector('#booking-form');
+  bookingForm?.querySelector('[data-package-picker]')?.remove();
+  if (bookingForm && activePackages.length) {
+    const picker = document.createElement('select');
+    picker.name = 'packageBalanceId';
+    picker.dataset.packagePicker = 'true';
+    picker.style.cssText = 'width:100%;margin:0 0 8px;padding:11px;border:1px solid var(--line);border-radius:8px;background:#fff';
+    picker.innerHTML = `<option value="">Оплата отдельно — без пакета</option>${activePackages.map((item) => `<option value="${experienceEscape(item.id)}" data-services="${experienceEscape((item.serviceIds ?? []).join(','))}" data-pet="${experienceEscape(item.petId ?? '')}" data-family="${item.familyShared ? 'true' : 'false'}">Пакет «${experienceEscape(item.name)}» · осталось ${item.remainingCredits}</option>`).join('')}`;
+    bookingForm.querySelector('[name="startsAt"]')?.before(picker);
+    const syncPackageChoices = () => { const petId = bookingForm.querySelector('[name="petId"]')?.value; const variantId = bookingForm.querySelector('[name="variantId"]')?.value; [...picker.options].slice(1).forEach((option) => { const services = String(option.dataset.services ?? '').split(','); option.disabled = Boolean((variantId && !services.includes(variantId)) || (petId && option.dataset.family !== 'true' && option.dataset.pet !== petId)); }); if (picker.selectedOptions[0]?.disabled) picker.value = ''; };
+    bookingForm.querySelector('[name="petId"]')?.addEventListener('change', syncPackageChoices);
+    bookingForm.querySelector('[name="variantId"]')?.addEventListener('change', syncPackageChoices);
+  }
+  section.querySelectorAll('[data-rebook]').forEach((button) => button.addEventListener('click', async () => {
+    const startsAt = window.prompt('На какое время повторить визит? Например: 2026-08-20 14:30');
+    if (!startsAt) return;
+    const parsed = new Date(startsAt);
+    if (Number.isNaN(parsed.valueOf()) || parsed <= new Date()) { window.alert('Укажите будущую дату и время.'); return; }
+    button.disabled = true;
+    try { await experienceApi(`/api/v1/client/appointments/${encodeURIComponent(button.dataset.rebook)}/rebook`, 'POST', { startsAt: parsed.toISOString() }); await renderClientExperience(); }
+    catch (error) { window.alert(error.message); button.disabled = false; }
+  }));
   section.querySelector('#consultation-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -97,6 +132,6 @@ async function renderClientExperience() {
 }
 
 const experienceStyle = document.createElement('style');
-experienceStyle.textContent = '@media(max-width:700px){#client-experience{grid-template-columns:1fr!important}#client-experience .timeline{grid-column:auto!important}#client-experience .finance-vault>div:last-child{grid-template-columns:1fr!important}}';
+experienceStyle.textContent = '@media(max-width:700px){#client-experience{grid-template-columns:1fr!important}#client-experience .timeline{grid-column:auto!important}#client-experience .finance-vault>div:last-child,#client-experience .care-program-grid{grid-template-columns:1fr!important}.care-program{padding-left:16px!important;padding-right:16px!important}}';
 document.head.append(experienceStyle);
 setTimeout(() => renderClientExperience().catch(() => {}), 500);
