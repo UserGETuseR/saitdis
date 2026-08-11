@@ -36,6 +36,9 @@ model Organization {
   prechecks Precheck[]
   hospitalBeds HospitalBed[]
   hospitalizations Hospitalization[]
+  inventoryItems InventoryItem[]
+  stockLots StockLot[]
+  stockMovements StockMovement[]
 }
 
 model Location {
@@ -48,6 +51,8 @@ model Location {
   @@index([organizationId])
   equipment      Equipment[]
   hospitalBeds   HospitalBed[]
+  stockLots      StockLot[]
+  stockMovements StockMovement[]
 }
 
 model UserIdentity {
@@ -825,6 +830,74 @@ model PurchaseOrder {
   supplier       Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   @@index([organizationId, locationId, state])
   @@index([supplierId, state])
+}
+
+model InventoryItem {
+  id                     String   @id @default(uuid())
+  organizationId         String
+  sku                    String
+  name                   String
+  itemType               String
+  unit                   String
+  barcode                String?
+  purchasePriceMinor     Int?
+  sellPriceMinor         Int?
+  lowStockThresholdMilli Int      @default(0)
+  storageRequirements    Json     @default("{}")
+  active                 Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  lots                   StockLot[]
+  movements              StockMovement[]
+  @@unique([organizationId, sku])
+  @@unique([organizationId, barcode])
+  @@index([organizationId, itemType, active])
+}
+
+model StockLot {
+  id             String   @id @default(uuid())
+  organizationId String
+  itemId         String
+  locationId     String
+  lotCode        String
+  expiryAt       DateTime?
+  quantityMilli  Int
+  state          String   @default("ACTIVE")
+  storageState   String   @default("AVAILABLE")
+  receivedAt     DateTime @default(now())
+  createdBy      String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location       Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  movements      StockMovement[]
+  @@unique([organizationId, itemId, locationId, lotCode])
+  @@index([organizationId, itemId, locationId, expiryAt])
+  @@index([organizationId, state, storageState])
+}
+
+model StockMovement {
+  id             String   @id @default(uuid())
+  organizationId String
+  itemId         String
+  lotId          String
+  locationId     String
+  direction      String
+  quantityMilli  Int
+  balanceAfterMilli Int
+  reason         String
+  referenceType  String?
+  referenceId    String?
+  petId          String?
+  performedBy    String
+  createdAt      DateTime @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  lot            StockLot @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  location       Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  @@index([organizationId, itemId, locationId, createdAt])
+  @@index([organizationId, referenceType, referenceId])
+  @@index([organizationId, petId, createdAt])
 }
 
 model PrintTemplate {

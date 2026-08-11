@@ -820,6 +820,84 @@ const server = createServer(async (request, response) => {
       await auditCommand({ actorId: account.current.userId, action: 'hospital.handoff_recorded', aggregateType: 'HospitalHandoff', aggregateId: handoff.id, idempotencyKey: key });
       json(response, 201, { handoff: { id: handoff.id, state: handoff.state, createdAt: handoff.createdAt } }); return;
     }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/inventory/dashboard') {
+      const account = await currentStaff(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER', 'VETERINARIAN', 'ASSISTANT'].includes(account.membership.role)) { json(response, 403, { error: 'INVENTORY_ROLE_REQUIRED' }); return; }
+      const [items, locations, movements] = await Promise.all([
+        db.inventoryItem.findMany({ where: { organizationId: config.organizationId, active: true }, include: { lots: { orderBy: { expiryAt: 'asc' } } }, orderBy: { name: 'asc' } }),
+        db.location.findMany({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } }),
+        db.stockMovement.findMany({ where: { organizationId: config.organizationId }, include: { item: true, lot: true }, orderBy: { createdAt: 'desc' }, take: 30 })
+      ]);
+      const now = Date.now(); const expiryWindow = now + 30 * 86400000;
+      json(response, 200, { locations: locations.map((location) => ({ id: location.id, name: location.name })), items: items.map((item) => { const usableLots = item.lots.filter((lot) => lot.state === 'ACTIVE' && lot.storageState === 'AVAILABLE' && (!lot.expiryAt || lot.expiryAt.valueOf() > now)); const totalMilli = usableLots.reduce((sum, lot) => sum + lot.quantityMilli, 0); return { id: item.id, sku: item.sku, name: item.name, itemType: item.itemType, unit: item.unit, barcode: item.barcode, totalMilli, lowStockThresholdMilli: item.lowStockThresholdMilli, lowStock: totalMilli <= item.lowStockThresholdMilli, lots: item.lots.map((lot) => ({ id: lot.id, lotCode: lot.lotCode, locationId: lot.locationId, expiryAt: lot.expiryAt, quantityMilli: lot.quantityMilli, state: lot.state, storageState: lot.storageState, expiringSoon: Boolean(lot.expiryAt && lot.expiryAt.valueOf() <= expiryWindow) })) }; }), movements: movements.map((movement) => ({ id: movement.id, item: movement.item.name, lotCode: movement.lot.lotCode, direction: movement.direction, quantityMilli: movement.quantityMilli, reason: movement.reason, referenceType: movement.referenceType, referenceId: movement.referenceId, createdAt: movement.createdAt })) }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/inventory/items') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER'].includes(account.membership.role)) { json(response, 403, { error: 'INVENTORY_MANAGER_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { sku?: string; name?: string; itemType?: string; unit?: string; barcode?: string; lowStockThresholdMilli?: number; purchasePriceMinor?: number; sellPriceMinor?: number; storageRequirements?: Record<string, string> } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const sku = String(input.sku ?? '').trim().toUpperCase(); const name = String(input.name ?? '').trim(); const unit = String(input.unit ?? '').trim(); const itemType = String(input.itemType ?? '').trim().toUpperCase();
+      if (!/^[A-Z0-9_.-]{2,40}$/.test(sku) || name.length < 2 || name.length > 240 || unit.length < 1 || unit.length > 40 || !['MEDICATION', 'CONSUMABLE', 'PRODUCT', 'FEED'].includes(itemType)) { json(response, 400, { error: 'INVALID_INVENTORY_ITEM' }); return; }
+      const existing = await db.inventoryItem.findUnique({ where: { organizationId_sku: { organizationId: config.organizationId, sku } } });
+      if (existing) { json(response, 409, { error: 'SKU_ALREADY_EXISTS' }); return; }
+      const item = await db.inventoryItem.create({ data: { organizationId: config.organizationId, sku, name, unit, itemType, barcode: String(input.barcode ?? '').trim() || null, lowStockThresholdMilli: Math.max(0, Math.trunc(Number(input.lowStockThresholdMilli ?? 0))), purchasePriceMinor: Number.isFinite(Number(input.purchasePriceMinor)) ? Math.max(0, Math.trunc(Number(input.purchasePriceMinor))) : null, sellPriceMinor: Number.isFinite(Number(input.sellPriceMinor)) ? Math.max(0, Math.trunc(Number(input.sellPriceMinor))) : null, storageRequirements: input.storageRequirements ?? {} } });
+      await auditCommand({ actorId: account.current.userId, action: 'inventory.item_created', aggregateType: 'InventoryItem', aggregateId: item.id, idempotencyKey: key, payload: { sku: item.sku } });
+      json(response, 201, { item: { id: item.id, sku: item.sku, name: item.name } }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/inventory/lots') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER'].includes(account.membership.role)) { json(response, 403, { error: 'INVENTORY_MANAGER_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { itemId?: string; locationId?: string; lotCode?: string; expiryAt?: string; quantityMilli?: number } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const quantityMilli = Math.trunc(Number(input.quantityMilli)); const lotCode = String(input.lotCode ?? '').trim().toUpperCase(); const expiryAt = input.expiryAt ? new Date(input.expiryAt) : null;
+      const [item, location] = await Promise.all([db.inventoryItem.findFirst({ where: { id: String(input.itemId ?? ''), organizationId: config.organizationId, active: true } }), db.location.findFirst({ where: { id: String(input.locationId ?? ''), organizationId: config.organizationId, active: true } })]);
+      if (!item || !location || quantityMilli <= 0 || quantityMilli > 100_000_000 || lotCode.length < 2 || lotCode.length > 100 || (expiryAt && Number.isNaN(expiryAt.valueOf()))) { json(response, 400, { error: 'INVALID_STOCK_RECEIPT' }); return; }
+      const existing = await db.stockLot.findUnique({ where: { organizationId_itemId_locationId_lotCode: { organizationId: config.organizationId, itemId: item.id, locationId: location.id, lotCode } } });
+      if (existing && String(existing.expiryAt?.toISOString() ?? '') !== String(expiryAt?.toISOString() ?? '')) { json(response, 409, { error: 'LOT_EXPIRY_MISMATCH' }); return; }
+      const result = await db.$transaction(async (tx) => {
+        const lot = existing ? await tx.stockLot.update({ where: { id: existing.id }, data: { quantityMilli: { increment: quantityMilli }, state: 'ACTIVE', storageState: 'AVAILABLE' } }) : await tx.stockLot.create({ data: { organizationId: config.organizationId, itemId: item.id, locationId: location.id, lotCode, expiryAt, quantityMilli, createdBy: account.current.userId } });
+        const movement = await tx.stockMovement.create({ data: { organizationId: config.organizationId, itemId: item.id, lotId: lot.id, locationId: location.id, direction: 'RECEIPT', quantityMilli, balanceAfterMilli: lot.quantityMilli, reason: 'Приёмка партии', performedBy: account.current.userId } });
+        return { lot, movement };
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'stock.received', aggregateType: 'StockMovement', aggregateId: result.movement.id, idempotencyKey: key, payload: { itemId: item.id, lotId: result.lot.id, quantityMilli } });
+      json(response, 201, { lot: { id: result.lot.id, lotCode: result.lot.lotCode, quantityMilli: result.lot.quantityMilli } }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/inventory/consume') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER', 'VETERINARIAN'].includes(account.membership.role)) { json(response, 403, { error: 'INVENTORY_CONSUMPTION_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { itemId?: string; locationId?: string; quantityMilli?: number; reason?: string; referenceType?: string; referenceId?: string; petId?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const quantityMilli = Math.trunc(Number(input.quantityMilli)); const reason = String(input.reason ?? '').trim();
+      const [item, location] = await Promise.all([db.inventoryItem.findFirst({ where: { id: String(input.itemId ?? ''), organizationId: config.organizationId, active: true } }), db.location.findFirst({ where: { id: String(input.locationId ?? ''), organizationId: config.organizationId, active: true } })]);
+      if (!item || !location || quantityMilli <= 0 || quantityMilli > 100_000_000 || reason.length < 3 || reason.length > 1000) { json(response, 400, { error: 'INVALID_STOCK_CONSUMPTION' }); return; }
+      let petId = String(input.petId ?? '').trim() || undefined; const referenceType = String(input.referenceType ?? '').trim().toUpperCase() || undefined; const referenceId = String(input.referenceId ?? '').trim() || undefined;
+      if (referenceType === 'ENCOUNTER' && referenceId) { const encounter = await db.encounter.findFirst({ where: { id: referenceId, organizationId: config.organizationId } }); if (!encounter) { json(response, 404, { error: 'REFERENCE_NOT_FOUND' }); return; } petId = encounter.petId; }
+      if (referenceType === 'TREATMENT_TASK' && referenceId) { const task = await db.treatmentTask.findFirst({ where: { id: referenceId, organizationId: config.organizationId }, include: { hospitalization: true } }); if (!task) { json(response, 404, { error: 'REFERENCE_NOT_FOUND' }); return; } petId = task.hospitalization.petId; }
+      try {
+        const movements = await db.$transaction(async (tx) => {
+          const candidates = await tx.stockLot.findMany({ where: { organizationId: config.organizationId, itemId: item.id, locationId: location.id, state: 'ACTIVE', storageState: 'AVAILABLE', quantityMilli: { gt: 0 } } });
+          const now = Date.now(); const lots = candidates.filter((lot) => !lot.expiryAt || lot.expiryAt.valueOf() > now).sort((left, right) => (left.expiryAt?.valueOf() ?? Number.MAX_SAFE_INTEGER) - (right.expiryAt?.valueOf() ?? Number.MAX_SAFE_INTEGER));
+          if (lots.reduce((sum, lot) => sum + lot.quantityMilli, 0) < quantityMilli) throw new Error('INSUFFICIENT_STOCK');
+          let remaining = quantityMilli; const created: { id: string }[] = [];
+          for (const lot of lots) {
+            if (!remaining) break; const take = Math.min(remaining, lot.quantityMilli); const updated = await tx.stockLot.updateMany({ where: { id: lot.id, quantityMilli: { gte: take } }, data: { quantityMilli: { decrement: take } } });
+            if (updated.count !== 1) throw new Error('STOCK_CHANGED');
+            const movement = await tx.stockMovement.create({ data: { organizationId: config.organizationId, itemId: item.id, lotId: lot.id, locationId: location.id, direction: 'CONSUMPTION', quantityMilli: take, balanceAfterMilli: lot.quantityMilli - take, reason, referenceType, referenceId, petId, performedBy: account.current.userId } });
+            created.push(movement); remaining -= take;
+          }
+          return created;
+        }, { isolationLevel: 'Serializable' });
+        await auditCommand({ actorId: account.current.userId, action: 'stock.consumed', aggregateType: 'InventoryItem', aggregateId: item.id, idempotencyKey: key, payload: { quantityMilli, referenceType, referenceId, movementIds: movements.map((movement) => movement.id) } });
+        json(response, 201, { consumption: { itemId: item.id, quantityMilli, movementIds: movements.map((movement) => movement.id) } }); return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        json(response, 409, { error: message === 'INSUFFICIENT_STOCK' ? 'INSUFFICIENT_STOCK' : 'STOCK_CHANGED_RETRY' }); return;
+      }
+    }
     if (request.method === 'POST' && url.pathname === '/api/v1/staff/grooming/visits') {
       const account = await currentStaff(request); const key = idempotencyKey(request);
       if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
