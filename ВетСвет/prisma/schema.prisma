@@ -387,6 +387,49 @@ model CarePlanTask {
   @@index([organizationId, dueAt, state])
 }
 
+model GroomingProfile {
+  id             String   @id @default(uuid())
+  organizationId String
+  petId          String
+  coatType       String?
+  sensitivities  String?
+  behaviorNotes  String?
+  preferredStyle String?
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  @@unique([organizationId, petId])
+  @@index([organizationId, petId])
+}
+
+model GroomingRecipe {
+  id             String   @id @default(uuid())
+  organizationId String
+  petId          String
+  title          String
+  steps          Json
+  notes          String?
+  isPreferred    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  @@index([organizationId, petId, isPreferred])
+}
+
+model GroomingVisit {
+  id             String   @id @default(uuid())
+  organizationId String
+  appointmentId  String   @unique
+  petId          String
+  recipeId       String?
+  state          String
+  report         String?
+  beforeFileIds  Json     @default("[]")
+  afterFileIds   Json     @default("[]")
+  startedBy      String
+  completedBy    String?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  @@index([organizationId, petId, state])
+}
+
 model PassportShare {
   id             String   @id @default(uuid())
   organizationId String

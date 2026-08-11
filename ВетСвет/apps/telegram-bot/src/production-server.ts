@@ -106,6 +106,13 @@ async function serveStaffHome(response: ServerResponse) {
     response.end(html.replace('</body>', '<script src="/staff/app.js"></script></body>'));
   } catch { json(response, 404, { error: 'NOT_FOUND' }); }
 }
+async function serveClientHome(response: ServerResponse) {
+  try {
+    const html = await readFile(join(clientRoot, 'index.html'), 'utf8');
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    response.end(html.replace('</body>', '<script src="/client/experience.js"></script></body>'));
+  } catch { json(response, 404, { error: 'NOT_FOUND' }); }
+}
 async function telegram(method: string, payload: Record<string, unknown>) {
   const result = await fetch(`https://api.telegram.org/bot${config.botToken}/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   if (!result.ok) throw new Error(`Telegram ${method} failed.`);
@@ -397,13 +404,15 @@ const server = createServer(async (request, response) => {
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
       const petIds = relations.map((item) => item.pet.id);
-      const [appointments, plans] = await Promise.all([
+      const [appointments, plans, groomingVisits] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { startsAt: 'asc' }, take: 20 }),
-        db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } })
+        db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } }),
+        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 })
       ]);
       const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
       const variantById = new Map(variants.map((item) => [item.id, item]));
-      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '' })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), timeline: [] })), petCount: petIds.length });
+      const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), timeline: [] })), petCount: petIds.length });
       return;
     }
     if (request.method === 'PATCH' && url.pathname === '/api/v1/client/profile') {
@@ -469,14 +478,15 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/dashboard') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } }, orderBy: { startsAt: 'asc' }, take: 80 });
-      const [owners, pets, variants, invoices] = await Promise.all([
+      const [owners, pets, variants, invoices, groomingVisits] = await Promise.all([
         db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.ownerId) } } }),
         db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.petId) } } }),
         db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }),
-        db.invoice.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } })
+        db.invoice.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } }),
+        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } })
       ]);
-      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
-      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—' })) }); return;
+      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
+      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
     }
     const staffAppointment = url.pathname.match(/^\/api\/v1\/staff\/appointments\/([^/]+)$/);
     if (request.method === 'PATCH' && staffAppointment) {
@@ -501,7 +511,64 @@ const server = createServer(async (request, response) => {
         await auditCommand({ actorId: account.current.userId, action: 'appointment.cancelled', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { note: String(input.note ?? '').trim().slice(0, 500) } });
         json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
       }
+      const transitions: Record<string, string[]> = { CHECK_IN: ['CONFIRMED'], START: ['CHECKED_IN'], READY: ['IN_SERVICE'], COMPLETE: ['READY'] };
+      if (action in transitions) {
+        if (appointment.staffId !== account.current.userId && account.membership.role !== 'ADMIN') { json(response, 403, { error: 'ASSIGNED_STAFF_REQUIRED' }); return; }
+        if (!transitions[action].includes(appointment.state)) { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
+        const states: Record<string, string> = { CHECK_IN: 'CHECKED_IN', START: 'IN_SERVICE', READY: 'READY', COMPLETE: 'COMPLETED' };
+        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: states[action] } });
+        await auditCommand({ actorId: account.current.userId, action: `appointment.${states[action].toLowerCase()}`, aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key });
+        json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
+      }
       json(response, 400, { error: 'UNKNOWN_APPOINTMENT_ACTION' }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/grooming/visits') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'GROOMER'].includes(account.membership.role)) { json(response, 403, { error: 'GROOMING_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { appointmentId?: string; coatType?: string; sensitivities?: string; behaviorNotes?: string; preferredStyle?: string; recipeTitle?: string; recipeSteps?: string[] } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const appointment = await db.appointment.findFirst({ where: { id: String(input.appointmentId ?? ''), organizationId: config.organizationId } });
+      if (!appointment || appointment.state !== 'IN_SERVICE' || (appointment.staffId !== account.current.userId && account.membership.role !== 'ADMIN')) { json(response, 409, { error: 'GROOMING_VISIT_NOT_READY' }); return; }
+      const variant = await db.serviceVariant.findFirst({ where: { id: appointment.variantId, organizationId: config.organizationId }, include: { service: true } });
+      if (!variant || variant.service.kind !== 'GROOMING') { json(response, 400, { error: 'GROOMING_APPOINTMENT_REQUIRED' }); return; }
+      const existing = await db.groomingVisit.findUnique({ where: { appointmentId: appointment.id } });
+      if (existing) { json(response, 409, { error: 'GROOMING_VISIT_EXISTS' }); return; }
+      const trim = (value: unknown, limit = 1000) => String(value ?? '').trim().slice(0, limit) || null;
+      const steps = Array.isArray(input.recipeSteps) ? input.recipeSteps.map((step) => String(step).trim()).filter(Boolean).slice(0, 20) : [];
+      const result = await db.$transaction(async (tx) => {
+        await tx.groomingProfile.upsert({ where: { organizationId_petId: { organizationId: config.organizationId, petId: appointment.petId } }, update: { coatType: trim(input.coatType, 180), sensitivities: trim(input.sensitivities), behaviorNotes: trim(input.behaviorNotes), preferredStyle: trim(input.preferredStyle, 240) }, create: { organizationId: config.organizationId, petId: appointment.petId, coatType: trim(input.coatType, 180), sensitivities: trim(input.sensitivities), behaviorNotes: trim(input.behaviorNotes), preferredStyle: trim(input.preferredStyle, 240) } });
+        if (steps.length) await tx.groomingRecipe.updateMany({ where: { organizationId: config.organizationId, petId: appointment.petId, isPreferred: true }, data: { isPreferred: false } });
+        const recipe = steps.length ? await tx.groomingRecipe.create({ data: { organizationId: config.organizationId, petId: appointment.petId, title: trim(input.recipeTitle, 180) ?? 'Индивидуальный уход', steps, isPreferred: true } }) : await tx.groomingRecipe.findFirst({ where: { organizationId: config.organizationId, petId: appointment.petId, isPreferred: true }, orderBy: { createdAt: 'desc' } });
+        return tx.groomingVisit.create({ data: { organizationId: config.organizationId, appointmentId: appointment.id, petId: appointment.petId, recipeId: recipe?.id, state: 'IN_PROGRESS', beforeFileIds: [], afterFileIds: [], startedBy: account.current.userId } });
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'grooming_visit.started', aggregateType: 'GroomingVisit', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: appointment.id } });
+      json(response, 201, { visit: { id: result.id, state: result.state, appointmentId: result.appointmentId } }); return;
+    }
+    const groomingVisit = url.pathname.match(/^\/api\/v1\/staff\/grooming\/visits\/([^/]+)$/);
+    if (request.method === 'PATCH' && groomingVisit) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'GROOMER'].includes(account.membership.role)) { json(response, 403, { error: 'GROOMING_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { report?: string; nextCareAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const visit = await db.groomingVisit.findFirst({ where: { id: decodeURIComponent(groomingVisit[1]), organizationId: config.organizationId } });
+      if (!visit || visit.state !== 'IN_PROGRESS') { json(response, 409, { error: 'GROOMING_VISIT_NOT_OPEN' }); return; }
+      const report = String(input.report ?? '').trim(); if (report.length < 10 || report.length > 5000) { json(response, 400, { error: 'GROOMING_REPORT_REQUIRED' }); return; }
+      const appointment = await db.appointment.findFirst({ where: { id: visit.appointmentId, organizationId: config.organizationId } });
+      if (!appointment || (appointment.staffId !== account.current.userId && account.membership.role !== 'ADMIN')) { json(response, 403, { error: 'ASSIGNED_STAFF_REQUIRED' }); return; }
+      const nextCareAt = input.nextCareAt ? new Date(input.nextCareAt) : undefined;
+      const result = await db.$transaction(async (tx) => {
+        const completed = await tx.groomingVisit.update({ where: { id: visit.id }, data: { state: 'COMPLETE', report, completedBy: account.current.userId, completedAt: new Date() } });
+        await tx.appointment.update({ where: { id: appointment.id }, data: { state: 'READY' } });
+        if (nextCareAt && !Number.isNaN(nextCareAt.valueOf()) && nextCareAt > new Date()) {
+          const plan = await tx.carePlan.findFirst({ where: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, state: 'ACTIVE' }, orderBy: { createdAt: 'desc' } }) ?? await tx.carePlan.create({ data: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, title: 'План ухода', state: 'ACTIVE' } });
+          await tx.carePlanTask.create({ data: { carePlanId: plan.id, organizationId: config.organizationId, title: 'Запланировать следующий уход', category: 'GROOMING_REBOOK', dueAt: nextCareAt, state: 'OPEN' } });
+        }
+        return completed;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'grooming_visit.completed', aggregateType: 'GroomingVisit', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: appointment.id } });
+      json(response, 200, { visit: { id: result.id, state: result.state, report: result.report } }); return;
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/auth/sign-out') {
       const current = await session(request);
@@ -510,7 +577,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && (url.pathname === '/client/' || url.pathname === '/client')) {
       const current = await session(request); if (!current || current.mode !== 'CLIENT') { redirect(response, '/auth/'); return; }
-      await serve(response, clientRoot, 'index.html'); return;
+      await serveClientHome(response); return;
     }
     if (request.method === 'GET' && url.pathname.startsWith('/client/')) { await serve(response, clientRoot, decodeURIComponent(url.pathname.slice(8))); return; }
     if (request.method === 'GET' && (url.pathname === '/staff/' || url.pathname === '/staff')) {
