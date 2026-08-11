@@ -299,7 +299,7 @@ async function setPassword(request: IncomingMessage, response: ServerResponse) {
   const owner = await db.userIdentity.findUnique({ where: { login } });
   if (owner && owner.id !== current.userId) { json(response, 409, { error: 'LOGIN_TAKEN' }); return; }
   await db.userIdentity.update({ where: { id: current.userId }, data: { login, passwordHash: await passwordHash(input.password!), passwordUpdatedAt: new Date() } });
-  json(response, 200, { ok: true });
+  json(response, 200, { ok: true, redirectTo: current.mode === 'STAFF' ? '/staff/' : '/client/' });
 }
 
 const server = createServer(async (request, response) => {
@@ -327,7 +327,7 @@ const server = createServer(async (request, response) => {
         db.telegramLoginRequest.update({ where: { id }, data: { state: 'CONSUMED', consumedAt: new Date() } })
       ]);
       setSession(response, token);
-      json(response, 200, { state: 'AUTHENTICATED', redirectTo: record.mode === 'STAFF' ? '/staff/' : '/client/' });
+      json(response, 200, { state: 'AUTHENTICATED', redirectTo: record.mode === 'STAFF' && !user.passwordHash ? '/account/password?next=/staff/' : record.mode === 'STAFF' ? '/staff/' : '/client/' });
       return;
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/auth/me') {
@@ -371,6 +371,10 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname.startsWith('/staff/')) { await serve(response, staffRoot, decodeURIComponent(url.pathname.slice(7))); return; }
     if (request.method === 'GET' && (url.pathname === '/auth/' || url.pathname === '/auth' || url.pathname === '/auth/telegram.html')) { await serve(response, authRoot, 'index.html'); return; }
+    if (request.method === 'GET' && (url.pathname === '/account/password' || url.pathname === '/account/password/')) {
+      if (!await session(request)) { redirect(response, '/auth/'); return; }
+      await serve(response, authRoot, 'password.html'); return;
+    }
     if (request.method === 'GET' && url.pathname.startsWith('/Photo/')) { await serve(response, photoRoot, decodeURIComponent(url.pathname.slice(7))); return; }
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) { await serve(response, publicRoot, 'index.html'); return; }
     json(response, 404, { error: 'NOT_FOUND' });
