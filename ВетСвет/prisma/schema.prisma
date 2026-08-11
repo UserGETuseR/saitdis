@@ -34,6 +34,8 @@ model Organization {
   staffProfiles StaffProfile[]
   credentials Credential[]
   prechecks Precheck[]
+  hospitalBeds HospitalBed[]
+  hospitalizations Hospitalization[]
 }
 
 model Location {
@@ -45,6 +47,7 @@ model Location {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   @@index([organizationId])
   equipment      Equipment[]
+  hospitalBeds   HospitalBed[]
 }
 
 model UserIdentity {
@@ -196,6 +199,7 @@ model Owner {
   relations      OwnerPetRelation[]
   invoices       Invoice[]
   consultations  Consultation[]
+  hospitalizations Hospitalization[]
   consents       Consent[]
   surgicalCases  SurgicalCase[]
   dentalCharts   DentalChart[]
@@ -219,6 +223,7 @@ model Pet {
   dentalCharts   DentalChart[]
   labOrders      LabOrder[]
   consultations  Consultation[]
+  hospitalizations Hospitalization[]
   specimens      Specimen[]
   @@index([organizationId, name])
 }
@@ -276,6 +281,7 @@ model Appointment {
   createdAt      DateTime @default(now())
   consultation   Consultation?
   encounter      Encounter?
+  hospitalization Hospitalization?
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
 }
@@ -569,11 +575,47 @@ model Hospitalization {
   organizationId String
   ownerId        String
   petId          String
+  appointmentId  String?  @unique
+  bedId          String?
+  responsibleClinicianId String?
+  acuity         String   @default("STABLE")
+  currentPlan    String?
+  ownerUpdateState String @default("DUE")
+  alerts         Json     @default("[]")
   state          String
   admittedAt     DateTime @default(now())
   dischargedAt   DateTime?
+  dischargedBy   String?
+  dischargeSummary String?
+  updatedAt      DateTime @updatedAt
   tasks          TreatmentTask[]
+  observations   HospitalObservation[]
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner          Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet      @relation(fields: [petId], references: [id], onDelete: Restrict)
+  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  bed            HospitalBed? @relation(fields: [bedId], references: [id], onDelete: Restrict)
   @@index([organizationId, petId, state])
+  @@index([organizationId, bedId, state])
+}
+
+model HospitalBed {
+  id             String   @id @default(uuid())
+  organizationId String
+  locationId     String
+  label          String
+  zone           String
+  state          String   @default("AVAILABLE")
+  cleaningState  String   @default("READY")
+  isolation      Boolean  @default(false)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  location       Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  hospitalizations Hospitalization[]
+  @@unique([organizationId, locationId, label])
+  @@index([organizationId, state, cleaningState])
 }
 
 model TreatmentTask {
@@ -581,12 +623,42 @@ model TreatmentTask {
   hospitalizationId String
   organizationId    String
   title             String
+  taskType          String          @default("TREATMENT")
+  instructions      String?
   scheduledAt       DateTime
   state             String
+  assignedStaffId   String?
   administeredBy    String?
   administeredAt    DateTime?
+  missedReason      String?
+  notes             String?
+  vitals             Json?
   hospitalization   Hospitalization @relation(fields: [hospitalizationId], references: [id], onDelete: Restrict)
   @@index([organizationId, scheduledAt, state])
+}
+
+model HospitalObservation {
+  id                String          @id @default(uuid())
+  hospitalizationId String
+  organizationId    String
+  acuity            String
+  vitals             Json
+  note              String?
+  recordedBy        String
+  recordedAt        DateTime        @default(now())
+  hospitalization   Hospitalization @relation(fields: [hospitalizationId], references: [id], onDelete: Restrict)
+  @@index([organizationId, hospitalizationId, recordedAt])
+}
+
+model HospitalHandoff {
+  id             String   @id @default(uuid())
+  organizationId String
+  summary        String
+  unresolved     Json     @default("[]")
+  state          String   @default("APPROVED")
+  createdBy      String
+  createdAt      DateTime @default(now())
+  @@index([organizationId, createdAt])
 }
 
 model SurgicalCase {

@@ -137,6 +137,14 @@ async function ensureBookingFoundation() {
     const variant = await db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, serviceId: service.id, name: item.variant } });
     if (!variant) await db.serviceVariant.create({ data: { organizationId: config.organizationId, serviceId: service.id, name: item.variant, durationMinutes: item.durationMinutes, priceMinor: 0, depositMinor: 0, allowedSpecies: ['DOG', 'CAT', 'OTHER'] } });
   }
+  if (!await db.hospitalBed.count({ where: { organizationId: config.organizationId, locationId: location.id } })) {
+    await db.hospitalBed.createMany({ data: [
+      { organizationId: config.organizationId, locationId: location.id, label: 'A-01', zone: 'Основной стационар' },
+      { organizationId: config.organizationId, locationId: location.id, label: 'A-02', zone: 'Основной стационар' },
+      { organizationId: config.organizationId, locationId: location.id, label: 'A-03', zone: 'Основной стационар' },
+      { organizationId: config.organizationId, locationId: location.id, label: 'ISO-01', zone: 'Изоляция', isolation: true }
+    ] });
+  }
   return location;
 }
 async function ownerFor(telegramUserId: string, fullName: string) {
@@ -432,17 +440,18 @@ const server = createServer(async (request, response) => {
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
       const petIds = relations.map((item) => item.pet.id);
-      const [appointments, plans, groomingVisits, consultations, clinicalCases] = await Promise.all([
+      const [appointments, plans, groomingVisits, consultations, clinicalCases, hospitalizations] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { startsAt: 'asc' }, take: 20 }),
         db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } }),
         db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 }),
         db.consultation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { createdAt: 'desc' }, take: 20 }),
-        db.clinicalCase.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, petId: { in: petIds } }, include: { encounters: { where: { state: 'FINALIZED' }, include: { prescriptions: true }, orderBy: { finalizedAt: 'desc' } } }, orderBy: { openedAt: 'desc' }, take: 20 })
+        db.clinicalCase.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, petId: { in: petIds } }, include: { encounters: { where: { state: 'FINALIZED' }, include: { prescriptions: true }, orderBy: { finalizedAt: 'desc' } } }, orderBy: { openedAt: 'desc' }, take: 20 }),
+        db.hospitalization.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { bed: true, tasks: { orderBy: { scheduledAt: 'asc' } }, observations: { orderBy: { recordedAt: 'desc' }, take: 3 } }, orderBy: { admittedAt: 'desc' }, take: 20 })
       ]);
       const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
       const variantById = new Map(variants.map((item) => [item.id, item]));
       const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
-      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), clinicalHistory: clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ id: encounter.id, reason: clinicalCase.reason, assessment: encounter.assessment, plan: encounter.plan, finalizedAt: encounter.finalizedAt, prescriptions: encounter.prescriptions.map((prescription) => ({ medicationName: prescription.medicationName, instructions: prescription.instructions, state: prescription.state })) }))), timeline: [] })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), petCount: petIds.length });
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), clinicalHistory: clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ id: encounter.id, reason: clinicalCase.reason, assessment: encounter.assessment, plan: encounter.plan, finalizedAt: encounter.finalizedAt, prescriptions: encounter.prescriptions.map((prescription) => ({ medicationName: prescription.medicationName, instructions: prescription.instructions, state: prescription.state })) }))), timeline: [] })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), hospitalizations: hospitalizations.map((item) => ({ id: item.id, petId: item.petId, state: item.state, acuity: item.acuity, currentPlan: item.currentPlan, ownerUpdateState: item.ownerUpdateState, alerts: item.alerts, bed: item.bed ? { label: item.bed.label, zone: item.bed.zone } : undefined, admittedAt: item.admittedAt, dischargedAt: item.dischargedAt, dischargeSummary: item.dischargeSummary, nextTasks: item.tasks.filter((task) => task.state === 'DUE').slice(0, 5).map((task) => ({ title: task.title, scheduledAt: task.scheduledAt })), lastObservation: item.observations[0] ? { acuity: item.observations[0].acuity, note: item.observations[0].note, recordedAt: item.observations[0].recordedAt } : undefined })), petCount: petIds.length });
       return;
     }
     if (request.method === 'PATCH' && url.pathname === '/api/v1/client/profile') {
@@ -549,17 +558,18 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/dashboard') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } }, orderBy: { startsAt: 'asc' }, take: 80 });
-      const [owners, pets, variants, invoices, groomingVisits, consultations, encounters] = await Promise.all([
+      const [owners, pets, variants, invoices, groomingVisits, consultations, encounters, hospitalizations] = await Promise.all([
         db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.ownerId) } } }),
         db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.petId) } } }),
         db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }),
         db.invoice.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } }),
         db.groomingVisit.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } }),
         db.consultation.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } }),
-        db.encounter.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } }, include: { prescriptions: true } })
+        db.encounter.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } }, include: { prescriptions: true } }),
+        db.hospitalization.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } })
       ]);
-      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item])); const consultationByAppointment = new Map(consultations.map((item) => [item.appointmentId, item])); const encounterByAppointment = new Map(encounters.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
-      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', encounter: encounterByAppointment.get(item.id) ? { id: encounterByAppointment.get(item.id)!.id, state: encounterByAppointment.get(item.id)!.state, assessment: encounterByAppointment.get(item.id)!.assessment, plan: encounterByAppointment.get(item.id)!.plan } : undefined, consultation: consultationByAppointment.get(item.id) ? { id: consultationByAppointment.get(item.id)!.id, state: consultationByAppointment.get(item.id)!.state, paymentState: consultationByAppointment.get(item.id)!.paymentState, question: consultationByAppointment.get(item.id)!.question, response: consultationByAppointment.get(item.id)!.response } : undefined, groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
+      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item])); const consultationByAppointment = new Map(consultations.map((item) => [item.appointmentId, item])); const encounterByAppointment = new Map(encounters.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const hospitalizationByAppointment = new Map(hospitalizations.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
+      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', hospitalization: hospitalizationByAppointment.get(item.id) ? { id: hospitalizationByAppointment.get(item.id)!.id, state: hospitalizationByAppointment.get(item.id)!.state } : undefined, encounter: encounterByAppointment.get(item.id) ? { id: encounterByAppointment.get(item.id)!.id, state: encounterByAppointment.get(item.id)!.state, assessment: encounterByAppointment.get(item.id)!.assessment, plan: encounterByAppointment.get(item.id)!.plan } : undefined, consultation: consultationByAppointment.get(item.id) ? { id: consultationByAppointment.get(item.id)!.id, state: consultationByAppointment.get(item.id)!.state, paymentState: consultationByAppointment.get(item.id)!.paymentState, question: consultationByAppointment.get(item.id)!.question, response: consultationByAppointment.get(item.id)!.response } : undefined, groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
     }
     const staffAppointment = url.pathname.match(/^\/api\/v1\/staff\/appointments\/([^/]+)$/);
     if (request.method === 'PATCH' && staffAppointment) {
@@ -657,6 +667,158 @@ const server = createServer(async (request, response) => {
       });
       await auditCommand({ actorId: account.current.userId, action: 'clinical.encounter_finalized', aggregateType: 'Encounter', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: appointment.id, petId: appointment.petId } });
       json(response, 201, { encounter: { id: result.id, state: result.state, version: result.version, assessment: result.assessment, plan: result.plan } }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/hospital/dashboard') {
+      const account = await currentStaff(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN', 'ASSISTANT'].includes(account.membership.role)) { json(response, 403, { error: 'HOSPITAL_ROLE_REQUIRED' }); return; }
+      const [beds, admissions, lastHandoff] = await Promise.all([
+        db.hospitalBed.findMany({ where: { organizationId: config.organizationId }, orderBy: [{ zone: 'asc' }, { label: 'asc' }] }),
+        db.hospitalization.findMany({ where: { organizationId: config.organizationId, state: { in: ['ADMITTED', 'IN_TREATMENT', 'DISCHARGE_READY'] } }, include: { owner: true, pet: true, bed: true, tasks: { orderBy: { scheduledAt: 'asc' } }, observations: { orderBy: { recordedAt: 'desc' }, take: 5 } }, orderBy: { admittedAt: 'asc' } }),
+        db.hospitalHandoff.findFirst({ where: { organizationId: config.organizationId }, orderBy: { createdAt: 'desc' } })
+      ]);
+      json(response, 200, { beds: beds.map((bed) => ({ id: bed.id, label: bed.label, zone: bed.zone, isolation: bed.isolation, state: bed.state, cleaningState: bed.cleaningState })), admissions: admissions.map((item) => ({ id: item.id, appointmentId: item.appointmentId, state: item.state, acuity: item.acuity, currentPlan: item.currentPlan, ownerUpdateState: item.ownerUpdateState, alerts: item.alerts, responsibleClinicianId: item.responsibleClinicianId, admittedAt: item.admittedAt, owner: item.owner.fullName, pet: item.pet.name, species: item.pet.species, bed: item.bed ? { id: item.bed.id, label: item.bed.label, zone: item.bed.zone } : undefined, tasks: item.tasks.map((task) => ({ id: task.id, title: task.title, taskType: task.taskType, instructions: task.instructions, scheduledAt: task.scheduledAt, state: task.state, assignedStaffId: task.assignedStaffId, administeredBy: task.administeredBy, administeredAt: task.administeredAt, missedReason: task.missedReason, notes: task.notes })), observations: item.observations.map((observation) => ({ id: observation.id, acuity: observation.acuity, vitals: observation.vitals, note: observation.note, recordedAt: observation.recordedAt })) })), lastHandoff: lastHandoff ? { summary: lastHandoff.summary, unresolved: lastHandoff.unresolved, createdAt: lastHandoff.createdAt } : undefined }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/hospital/admissions') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN'].includes(account.membership.role)) { json(response, 403, { error: 'CLINICAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { appointmentId?: string; bedId?: string; acuity?: string; currentPlan?: string; alerts?: string[] } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const [appointment, bed] = await Promise.all([
+        db.appointment.findFirst({ where: { id: String(input.appointmentId ?? ''), organizationId: config.organizationId } }),
+        db.hospitalBed.findFirst({ where: { id: String(input.bedId ?? ''), organizationId: config.organizationId } })
+      ]);
+      if (!appointment || !['IN_SERVICE', 'READY'].includes(appointment.state)) { json(response, 409, { error: 'APPOINTMENT_NOT_READY_FOR_ADMISSION' }); return; }
+      if (appointment.staffId !== account.current.userId && account.membership.role !== 'ADMIN') { json(response, 403, { error: 'ASSIGNED_STAFF_REQUIRED' }); return; }
+      const [variant, encounter, activeAdmission] = await Promise.all([
+        db.serviceVariant.findFirst({ where: { id: appointment.variantId, organizationId: config.organizationId }, include: { service: true } }),
+        db.encounter.findUnique({ where: { appointmentId: appointment.id } }),
+        db.hospitalization.findFirst({ where: { organizationId: config.organizationId, petId: appointment.petId, state: { in: ['ADMITTED', 'IN_TREATMENT', 'DISCHARGE_READY'] } } })
+      ]);
+      if (!variant || variant.service.kind !== 'VETERINARY' || !encounter || encounter.state !== 'FINALIZED') { json(response, 409, { error: 'FINALIZED_CLINICAL_ENCOUNTER_REQUIRED' }); return; }
+      if (activeAdmission) { json(response, 409, { error: 'PET_ALREADY_ADMITTED' }); return; }
+      if (!bed || bed.state !== 'AVAILABLE' || bed.cleaningState !== 'READY') { json(response, 409, { error: 'HOSPITAL_BED_NOT_AVAILABLE' }); return; }
+      const acuity = String(input.acuity ?? 'STABLE').toUpperCase(); const currentPlan = String(input.currentPlan ?? '').trim();
+      if (!['STABLE', 'WATCH', 'CRITICAL'].includes(acuity) || currentPlan.length < 10 || currentPlan.length > 4000) { json(response, 400, { error: 'INVALID_ADMISSION_PLAN' }); return; }
+      const alerts = Array.isArray(input.alerts) ? input.alerts.map((item) => String(item).trim()).filter(Boolean).slice(0, 20) : [];
+      const admission = await db.$transaction(async (tx) => {
+        const created = await tx.hospitalization.create({ data: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, appointmentId: appointment.id, bedId: bed.id, responsibleClinicianId: account.current.userId, acuity, currentPlan, alerts, state: 'ADMITTED' } });
+        await tx.hospitalBed.update({ where: { id: bed.id }, data: { state: 'OCCUPIED' } });
+        await tx.appointment.update({ where: { id: appointment.id }, data: { state: 'COMPLETED' } });
+        return created;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'hospital.admitted', aggregateType: 'Hospitalization', aggregateId: admission.id, idempotencyKey: key, payload: { petId: admission.petId, bedId: bed.id } });
+      json(response, 201, { admission: { id: admission.id, state: admission.state, acuity: admission.acuity, bedId: admission.bedId } }); return;
+    }
+    const hospitalTaskCreate = url.pathname.match(/^\/api\/v1\/staff\/hospital\/admissions\/([^/]+)\/tasks$/);
+    if (request.method === 'POST' && hospitalTaskCreate) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN'].includes(account.membership.role)) { json(response, 403, { error: 'CLINICAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { title?: string; taskType?: string; instructions?: string; scheduledAt?: string; assignedStaffId?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const admission = await db.hospitalization.findFirst({ where: { id: decodeURIComponent(hospitalTaskCreate[1]), organizationId: config.organizationId, state: { in: ['ADMITTED', 'IN_TREATMENT'] } } });
+      const title = String(input.title ?? '').trim(); const instructions = String(input.instructions ?? '').trim(); const scheduledAt = new Date(String(input.scheduledAt ?? ''));
+      if (!admission || title.length < 3 || title.length > 240 || instructions.length > 2000 || Number.isNaN(scheduledAt.valueOf())) { json(response, 400, { error: 'INVALID_TREATMENT_TASK' }); return; }
+      const task = await db.$transaction(async (tx) => {
+        const created = await tx.treatmentTask.create({ data: { hospitalizationId: admission.id, organizationId: config.organizationId, title, taskType: String(input.taskType ?? 'TREATMENT').toUpperCase().slice(0, 40), instructions: instructions || null, scheduledAt, state: 'DUE', assignedStaffId: String(input.assignedStaffId ?? '').trim() || null } });
+        await tx.hospitalization.update({ where: { id: admission.id }, data: { state: 'IN_TREATMENT' } });
+        return created;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'hospital.treatment_scheduled', aggregateType: 'TreatmentTask', aggregateId: task.id, idempotencyKey: key, payload: { hospitalizationId: admission.id } });
+      json(response, 201, { task: { id: task.id, state: task.state, scheduledAt: task.scheduledAt } }); return;
+    }
+    const hospitalTaskAction = url.pathname.match(/^\/api\/v1\/staff\/hospital\/tasks\/([^/]+)$/);
+    if (request.method === 'PATCH' && hospitalTaskAction) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN', 'ASSISTANT'].includes(account.membership.role)) { json(response, 403, { error: 'HOSPITAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { action?: string; notes?: string; missedReason?: string; vitals?: Record<string, string> } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const task = await db.treatmentTask.findFirst({ where: { id: decodeURIComponent(hospitalTaskAction[1]), organizationId: config.organizationId }, include: { hospitalization: true } });
+      if (!task || task.state !== 'DUE' || !['ADMITTED', 'IN_TREATMENT'].includes(task.hospitalization.state)) { json(response, 409, { error: 'TREATMENT_TASK_NOT_DUE' }); return; }
+      const action = String(input.action ?? '').toUpperCase(); const missedReason = String(input.missedReason ?? '').trim();
+      if (!['ADMINISTER', 'SKIP'].includes(action) || (action === 'SKIP' && missedReason.length < 3)) { json(response, 400, { error: 'INVALID_TREATMENT_ACTION' }); return; }
+      const updated = await db.treatmentTask.update({ where: { id: task.id }, data: { state: action === 'ADMINISTER' ? 'ADMINISTERED' : 'SKIPPED', administeredBy: account.current.userId, administeredAt: new Date(), missedReason: action === 'SKIP' ? missedReason.slice(0, 1000) : null, notes: String(input.notes ?? '').trim().slice(0, 2000) || null, vitals: input.vitals ?? undefined } });
+      await auditCommand({ actorId: account.current.userId, action: action === 'ADMINISTER' ? 'hospital.treatment_administered' : 'hospital.treatment_skipped', aggregateType: 'TreatmentTask', aggregateId: task.id, idempotencyKey: key, payload: { hospitalizationId: task.hospitalizationId } });
+      json(response, 200, { task: { id: updated.id, state: updated.state, administeredAt: updated.administeredAt } }); return;
+    }
+    const hospitalObservation = url.pathname.match(/^\/api\/v1\/staff\/hospital\/admissions\/([^/]+)\/observations$/);
+    if (request.method === 'POST' && hospitalObservation) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN', 'ASSISTANT'].includes(account.membership.role)) { json(response, 403, { error: 'HOSPITAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { acuity?: string; note?: string; temperature?: string; pulse?: string; respiration?: string; weight?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const admission = await db.hospitalization.findFirst({ where: { id: decodeURIComponent(hospitalObservation[1]), organizationId: config.organizationId, state: { in: ['ADMITTED', 'IN_TREATMENT'] } } });
+      const acuity = String(input.acuity ?? '').toUpperCase(); const note = String(input.note ?? '').trim(); const vitals = { temperature: String(input.temperature ?? '').trim(), pulse: String(input.pulse ?? '').trim(), respiration: String(input.respiration ?? '').trim(), weight: String(input.weight ?? '').trim() };
+      if (!admission || !['STABLE', 'WATCH', 'CRITICAL'].includes(acuity) || (!note && !Object.values(vitals).some(Boolean))) { json(response, 400, { error: 'OBSERVATION_REQUIRED' }); return; }
+      const observation = await db.$transaction(async (tx) => {
+        const created = await tx.hospitalObservation.create({ data: { hospitalizationId: admission.id, organizationId: config.organizationId, acuity, vitals, note: note.slice(0, 3000) || null, recordedBy: account.current.userId } });
+        await tx.hospitalization.update({ where: { id: admission.id }, data: { acuity } });
+        return created;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'hospital.observation_recorded', aggregateType: 'HospitalObservation', aggregateId: observation.id, idempotencyKey: key, payload: { hospitalizationId: admission.id, acuity } });
+      json(response, 201, { observation: { id: observation.id, acuity: observation.acuity, recordedAt: observation.recordedAt } }); return;
+    }
+    const hospitalAdmissionAction = url.pathname.match(/^\/api\/v1\/staff\/hospital\/admissions\/([^/]+)$/);
+    if (request.method === 'PATCH' && hospitalAdmissionAction) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN'].includes(account.membership.role)) { json(response, 403, { error: 'CLINICAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { action?: string; dischargeSummary?: string; ownerUpdateState?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const admission = await db.hospitalization.findFirst({ where: { id: decodeURIComponent(hospitalAdmissionAction[1]), organizationId: config.organizationId }, include: { tasks: true } });
+      if (!admission) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      const action = String(input.action ?? '').toUpperCase();
+      if (action === 'OWNER_UPDATED') {
+        const updated = await db.hospitalization.update({ where: { id: admission.id }, data: { ownerUpdateState: 'UPDATED' } });
+        await auditCommand({ actorId: account.current.userId, action: 'hospital.owner_updated', aggregateType: 'Hospitalization', aggregateId: admission.id, idempotencyKey: key });
+        json(response, 200, { admission: { id: updated.id, ownerUpdateState: updated.ownerUpdateState } }); return;
+      }
+      if (action === 'READY_FOR_DISCHARGE') {
+        if (!['ADMITTED', 'IN_TREATMENT'].includes(admission.state) || admission.tasks.some((task) => task.state === 'DUE')) { json(response, 409, { error: 'OUTSTANDING_TREATMENT_TASKS' }); return; }
+        const summary = String(input.dischargeSummary ?? '').trim(); if (summary.length < 20 || summary.length > 6000) { json(response, 400, { error: 'DISCHARGE_SUMMARY_REQUIRED' }); return; }
+        const updated = await db.hospitalization.update({ where: { id: admission.id }, data: { state: 'DISCHARGE_READY', dischargeSummary: summary, ownerUpdateState: 'UPDATED' } });
+        await auditCommand({ actorId: account.current.userId, action: 'hospital.discharge_ready', aggregateType: 'Hospitalization', aggregateId: admission.id, idempotencyKey: key });
+        json(response, 200, { admission: { id: updated.id, state: updated.state } }); return;
+      }
+      if (action === 'DISCHARGE') {
+        if (admission.state !== 'DISCHARGE_READY' || !admission.dischargeSummary) { json(response, 409, { error: 'DISCHARGE_NOT_READY' }); return; }
+        const updated = await db.$transaction(async (tx) => {
+          const discharged = await tx.hospitalization.update({ where: { id: admission.id }, data: { state: 'DISCHARGED', dischargedAt: new Date(), dischargedBy: account.current.userId } });
+          if (admission.bedId) await tx.hospitalBed.update({ where: { id: admission.bedId }, data: { state: 'CLEANING', cleaningState: 'DIRTY' } });
+          return discharged;
+        });
+        await auditCommand({ actorId: account.current.userId, action: 'hospital.discharged', aggregateType: 'Hospitalization', aggregateId: admission.id, idempotencyKey: key, payload: { bedId: admission.bedId ?? undefined } });
+        json(response, 200, { admission: { id: updated.id, state: updated.state, dischargedAt: updated.dischargedAt } }); return;
+      }
+      json(response, 400, { error: 'UNKNOWN_HOSPITAL_ACTION' }); return;
+    }
+    const hospitalBedAction = url.pathname.match(/^\/api\/v1\/staff\/hospital\/beds\/([^/]+)$/);
+    if (request.method === 'PATCH' && hospitalBedAction) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'ASSISTANT'].includes(account.membership.role)) { json(response, 403, { error: 'HOSPITAL_BED_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      const bed = await db.hospitalBed.findFirst({ where: { id: decodeURIComponent(hospitalBedAction[1]), organizationId: config.organizationId } });
+      if (!bed || bed.state !== 'CLEANING' || bed.cleaningState !== 'DIRTY') { json(response, 409, { error: 'BED_NOT_WAITING_FOR_CLEANING' }); return; }
+      const updated = await db.hospitalBed.update({ where: { id: bed.id }, data: { state: 'AVAILABLE', cleaningState: 'READY' } });
+      await auditCommand({ actorId: account.current.userId, action: 'hospital.bed_cleaned', aggregateType: 'HospitalBed', aggregateId: bed.id, idempotencyKey: key });
+      json(response, 200, { bed: { id: updated.id, state: updated.state, cleaningState: updated.cleaningState } }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/hospital/handoffs') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'VETERINARIAN', 'ASSISTANT'].includes(account.membership.role)) { json(response, 403, { error: 'HOSPITAL_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { summary?: string; unresolved?: string[] } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const summary = String(input.summary ?? '').trim(); const unresolved = Array.isArray(input.unresolved) ? input.unresolved.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : [];
+      if (summary.length < 20 || summary.length > 6000) { json(response, 400, { error: 'HANDOFF_SUMMARY_REQUIRED' }); return; }
+      const handoff = await db.hospitalHandoff.create({ data: { organizationId: config.organizationId, summary, unresolved, createdBy: account.current.userId } });
+      await auditCommand({ actorId: account.current.userId, action: 'hospital.handoff_recorded', aggregateType: 'HospitalHandoff', aggregateId: handoff.id, idempotencyKey: key });
+      json(response, 201, { handoff: { id: handoff.id, state: handoff.state, createdAt: handoff.createdAt } }); return;
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/staff/grooming/visits') {
       const account = await currentStaff(request); const key = idempotencyKey(request);
