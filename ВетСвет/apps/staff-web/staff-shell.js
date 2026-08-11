@@ -53,8 +53,9 @@
   };
 
   function renderNav() {
+    const labels = { today: 'Сегодня', schedule: 'Запись', patients: 'Пациенты', clinical: 'Медицина', grooming: 'Груминг', consultations: 'Консультации', hospital: 'Стационар', inbox: 'Сообщения', tasks: 'Задачи', inventory: 'Склад', finance: 'Финансы', crm: 'CRM', growth: 'Лояльность', analytics: 'Отчёты', settings: 'Настройки' };
     const list = allowedRoutes(); let group = '';
-    nav.innerHTML = list.map((route) => { const heading = group === route.group ? '' : `<div class="nav-group">${escapeHtml(route.group)}</div>`; group = route.group; return `${heading}<a class="module-link" data-route="${route.id}" href="#/${route.id}"><i>${route.icon}</i><span>${escapeHtml(route.id === 'inbox' ? 'Сообщения' : route.id === 'schedule' ? 'Запись' : route.id === 'patients' ? 'Пациенты' : route.id === 'inventory' ? 'Склад' : route.id === 'analytics' ? 'Отчёты' : route.title.split(' ')[0].replace(/[.—]/g, ''))}</span>${route.id === 'inbox' ? '<em>live</em>' : ''}</a>`; }).join('');
+    nav.innerHTML = list.map((route) => { const heading = group === route.group ? '' : `<div class="nav-group">${escapeHtml(route.group)}</div>`; group = route.group; return `${heading}<a class="module-link" data-route="${route.id}" href="#/${route.id}"><i>${route.icon}</i><span>${escapeHtml(labels[route.id])}</span>${route.id === 'inbox' ? '<em>live</em>' : ''}</a>`; }).join('');
     const dockIds = ['today', 'schedule', 'patients', 'tasks'];
     dock.innerHTML = dockIds.map((id) => { const route = routeById.get(id); return `<a class="dock-link" data-route="${id}" href="#/${id}"><i>${route.icon}</i><span>${id === 'today' ? 'Сегодня' : id === 'schedule' ? 'Запись' : id === 'patients' ? 'Пациенты' : 'Задачи'}</span></a>`; }).join('') + '<button class="dock-link" id="dock-more" type="button"><i>•••</i><span>Ещё</span></button>';
     document.querySelector('#dock-more')?.addEventListener('click', openRail);
