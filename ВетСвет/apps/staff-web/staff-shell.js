@@ -100,7 +100,7 @@
 
   function openRail() { document.body.classList.add('rail-open'); }
   function closeRail() { document.body.classList.remove('rail-open'); }
-  document.querySelector('#mobile-menu').addEventListener('click', openRail);
+  document.querySelector('#mobile-menu').addEventListener('click', () => document.body.classList.toggle('rail-open'));
   document.querySelector('#rail-scrim').addEventListener('click', closeRail);
   rail.addEventListener('click', (event) => { if (event.target.closest('.module-link')) closeRail(); });
 
