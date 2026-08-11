@@ -147,6 +147,49 @@ async function ensureBookingFoundation() {
   }
   return location;
 }
+async function ensureDocumentFoundation() {
+  const templates = [
+    {
+      kind: 'PROCEDURE_CONSENT',
+      title: 'Согласие на осмотр и процедуры',
+      body: '<p>Я, {{owner}}, подтверждаю согласие на осмотр и согласованные процедуры для питомца {{pet}} в VetSvet.</p><p>Команда объяснила цель визита «{{service}}», ожидаемый результат, существенные риски и возможные альтернативы. Я могу задать вопросы до начала процедуры.</p>'
+    },
+    {
+      kind: 'GROOMING_CONSENT',
+      title: 'Согласие на груминг и уход',
+      body: '<p>Я, {{owner}}, передаю питомца {{pet}} команде VetSvet для услуги «{{service}}».</p><p>Я сообщил(а) об особенностях здоровья и поведения. Разрешаю остановить процедуру, если продолжение станет небезопасным для питомца.</p>'
+    },
+    {
+      kind: 'REMOTE_CONSULTATION_CONSENT',
+      title: 'Условия дистанционной консультации',
+      body: '<p>Я, {{owner}}, понимаю, что дистанционная консультация по питомцу {{pet}} не заменяет очный осмотр и экстренную помощь.</p><p>Я обязуюсь сообщить достоверные сведения и обратиться очно при ухудшении состояния или по рекомендации специалиста VetSvet.</p>'
+    },
+    {
+      kind: 'ESTIMATE_APPROVAL',
+      title: 'Согласование расчёта',
+      body: '<p>Я, {{owner}}, ознакомился(ась) с расчётом VetSvet по питомцу {{pet}} на сумму {{amount}}.</p><p>Изменения объёма помощи и итоговой стоимости согласуются отдельно.</p>'
+    }
+  ];
+  for (const template of templates) {
+    await db.printTemplate.upsert({
+      where: { organizationId_kind_version: { organizationId: config.organizationId, kind: template.kind, version: 1 } },
+      update: { title: template.title, body: template.body, contentHash: digest(template.body), state: 'PUBLISHED', publishedAt: new Date() },
+      create: { organizationId: config.organizationId, kind: template.kind, title: template.title, version: 1, body: template.body, contentHash: digest(template.body), state: 'PUBLISHED', publishedAt: new Date() }
+    });
+  }
+}
+function safeDocumentValue(value: unknown) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character));
+}
+function renderDocumentBody(template: string, values: Record<string, unknown>) {
+  return template.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_, key: string) => safeDocumentValue(values[key] ?? '—'));
+}
+function invoiceState(totalMinor: number, paidMinor: number, issued: boolean) {
+  if (totalMinor <= 0) return issued ? 'ISSUED' : 'DRAFT';
+  if (paidMinor >= totalMinor) return 'PAID';
+  if (paidMinor > 0) return 'PARTIALLY_PAID';
+  return issued ? 'ISSUED' : 'DRAFT';
+}
 async function ownerFor(telegramUserId: string, fullName: string) {
   const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
   return db.owner.upsert({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, update: { fullName, userId: user.id }, create: { organizationId: config.organizationId, userId: user.id, telegramUserId, fullName } });
@@ -206,12 +249,18 @@ async function handleUpdate(update: TgUpdate) {
     if (!proof || proof.state !== 'PENDING_REVIEW') { await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: 'Чек уже обработан.' }); return; }
     const approved = match[1] === 'approve';
     const consultationInvoice = proof.consultation?.appointmentId ? await db.invoice.findUnique({ where: { appointmentId: proof.consultation.appointmentId } }) : undefined;
-    await db.$transaction([
-      db.telegramPaymentProof.update({ where: { id: proof.id }, data: { state: approved ? 'CONFIRMED' : 'REJECTED', reviewedAt: new Date(), reviewedByChatId: admin.chatId } }),
-      ...(proof.requestId ? [db.telegramRequest.update({ where: { id: proof.requestId }, data: { state: approved ? 'READY' : 'WAITING_PAYMENT' } })] : []),
-      ...(proof.consultationId ? [db.consultation.update({ where: { id: proof.consultationId }, data: { paymentState: approved ? 'CONFIRMED' : 'AWAITING_PROOF', state: approved ? 'READY_FOR_SCHEDULING' : 'WAITING_PAYMENT' } })] : []),
-      ...(consultationInvoice ? [db.invoice.update({ where: { id: consultationInvoice.id }, data: { state: approved ? 'PAID' : 'PENDING_PAYMENT_REVIEW', ...(approved ? { paidMinor: consultationInvoice.totalMinor } : {}) } })] : [])
-    ]);
+    await db.$transaction(async (tx) => {
+      await tx.telegramPaymentProof.update({ where: { id: proof.id }, data: { state: approved ? 'CONFIRMED' : 'REJECTED', reviewedAt: new Date(), reviewedByChatId: admin.chatId } });
+      if (proof.requestId) await tx.telegramRequest.update({ where: { id: proof.requestId }, data: { state: approved ? 'READY' : 'WAITING_PAYMENT' } });
+      if (proof.consultationId) await tx.consultation.update({ where: { id: proof.consultationId }, data: { paymentState: approved ? 'CONFIRMED' : 'AWAITING_PROOF', state: approved ? 'READY_FOR_SCHEDULING' : 'WAITING_PAYMENT' } });
+      if (consultationInvoice) {
+        if (approved && consultationInvoice.totalMinor > 0) {
+          const payment = await tx.payment.create({ data: { organizationId: config.organizationId, invoiceId: consultationInvoice.id, provider: 'TELEGRAM_PROOF', providerTransactionId: proof.id, amountMinor: consultationInvoice.totalMinor, currency: consultationInvoice.currency, state: 'CONFIRMED', method: 'SBP_MANUAL_REVIEW', confirmedAt: new Date() } });
+          await tx.fiscalReceipt.create({ data: { organizationId: config.organizationId, invoiceId: consultationInvoice.id, paymentId: payment.id, state: 'PENDING_PROVIDER', idempotencyKey: `telegram-proof:${proof.id}` } });
+        }
+        await tx.invoice.update({ where: { id: consultationInvoice.id }, data: { state: approved ? 'PAID' : 'PENDING_PAYMENT_REVIEW', ...(approved ? { paidMinor: consultationInvoice.totalMinor } : {}) } });
+      }
+    });
     await telegram('answerCallbackQuery', { callback_query_id: callback.id, text: approved ? 'Оплата подтверждена.' : 'Оплата отклонена.' });
     await say(proof.chatId, approved ? 'Оплата подтверждена. Мы получили запрос и скоро вернёмся с ответом.' : 'Чек пока не удалось подтвердить. Проверьте перевод и отправьте новый скриншот.');
     return;
@@ -440,19 +489,51 @@ const server = createServer(async (request, response) => {
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
       const petIds = relations.map((item) => item.pet.id);
-      const [appointments, plans, groomingVisits, consultations, clinicalCases, hospitalizations] = await Promise.all([
+      const [appointments, plans, groomingVisits, consultations, clinicalCases, hospitalizations, invoices, documents] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { startsAt: 'asc' }, take: 20 }),
         db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } }),
         db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 }),
         db.consultation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { createdAt: 'desc' }, take: 20 }),
         db.clinicalCase.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, petId: { in: petIds } }, include: { encounters: { where: { state: 'FINALIZED' }, include: { prescriptions: true }, orderBy: { finalizedAt: 'desc' } } }, orderBy: { openedAt: 'desc' }, take: 20 }),
-        db.hospitalization.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { bed: true, tasks: { orderBy: { scheduledAt: 'asc' } }, observations: { orderBy: { recordedAt: 'desc' }, take: 3 } }, orderBy: { admittedAt: 'desc' }, take: 20 })
+        db.hospitalization.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { bed: true, tasks: { orderBy: { scheduledAt: 'asc' } }, observations: { orderBy: { recordedAt: 'desc' }, take: 3 } }, orderBy: { admittedAt: 'desc' }, take: 20 }),
+        db.invoice.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { lines: true, payments: { orderBy: { createdAt: 'desc' } }, fiscalReceipts: { orderBy: { createdAt: 'desc' } } }, orderBy: { createdAt: 'desc' }, take: 30 }),
+        db.generatedDocument.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, revokedAt: null }, orderBy: { createdAt: 'desc' }, take: 30 })
       ]);
       const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
       const variantById = new Map(variants.map((item) => [item.id, item]));
       const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
-      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), clinicalHistory: clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ id: encounter.id, reason: clinicalCase.reason, assessment: encounter.assessment, plan: encounter.plan, finalizedAt: encounter.finalizedAt, prescriptions: encounter.prescriptions.map((prescription) => ({ medicationName: prescription.medicationName, instructions: prescription.instructions, state: prescription.state })) }))), timeline: [] })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), hospitalizations: hospitalizations.map((item) => ({ id: item.id, petId: item.petId, state: item.state, acuity: item.acuity, currentPlan: item.currentPlan, ownerUpdateState: item.ownerUpdateState, alerts: item.alerts, bed: item.bed ? { label: item.bed.label, zone: item.bed.zone } : undefined, admittedAt: item.admittedAt, dischargedAt: item.dischargedAt, dischargeSummary: item.dischargeSummary, nextTasks: item.tasks.filter((task) => task.state === 'DUE').slice(0, 5).map((task) => ({ title: task.title, scheduledAt: task.scheduledAt })), lastObservation: item.observations[0] ? { acuity: item.observations[0].acuity, note: item.observations[0].note, recordedAt: item.observations[0].recordedAt } : undefined })), petCount: petIds.length });
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', grooming: groomingByAppointment.get(appointment.id) ? { state: groomingByAppointment.get(appointment.id)!.state, report: groomingByAppointment.get(appointment.id)!.report, completedAt: groomingByAppointment.get(appointment.id)!.completedAt } : undefined })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), clinicalHistory: clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ id: encounter.id, reason: clinicalCase.reason, assessment: encounter.assessment, plan: encounter.plan, finalizedAt: encounter.finalizedAt, prescriptions: encounter.prescriptions.map((prescription) => ({ medicationName: prescription.medicationName, instructions: prescription.instructions, state: prescription.state })) }))), timeline: [] })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), hospitalizations: hospitalizations.map((item) => ({ id: item.id, petId: item.petId, state: item.state, acuity: item.acuity, currentPlan: item.currentPlan, ownerUpdateState: item.ownerUpdateState, alerts: item.alerts, bed: item.bed ? { label: item.bed.label, zone: item.bed.zone } : undefined, admittedAt: item.admittedAt, dischargedAt: item.dischargedAt, dischargeSummary: item.dischargeSummary, nextTasks: item.tasks.filter((task) => task.state === 'DUE').slice(0, 5).map((task) => ({ title: task.title, scheduledAt: task.scheduledAt })), lastObservation: item.observations[0] ? { acuity: item.observations[0].acuity, note: item.observations[0].note, recordedAt: item.observations[0].recordedAt } : undefined })), invoices: invoices.map((invoice) => ({ id: invoice.id, appointmentId: invoice.appointmentId, state: invoice.state, totalMinor: invoice.totalMinor, paidMinor: invoice.paidMinor, currency: invoice.currency, createdAt: invoice.createdAt, lines: invoice.lines.map((line) => ({ id: line.id, lineType: line.lineType, description: line.description, quantityMilli: line.quantityMilli, unitPriceMinor: line.unitPriceMinor, discountMinor: line.discountMinor, totalMinor: line.totalMinor })), payments: invoice.payments.map((payment) => ({ id: payment.id, amountMinor: payment.amountMinor, method: payment.method, state: payment.state, confirmedAt: payment.confirmedAt })), receiptState: invoice.fiscalReceipts[0]?.state })), documents: documents.map((document) => ({ id: document.id, petId: document.petId, appointmentId: document.appointmentId, invoiceId: document.invoiceId, kind: document.kind, title: document.title, documentVersion: document.documentVersion, state: document.state, contentHash: document.contentHash, createdAt: document.createdAt, signedAt: document.signedAt })), petCount: petIds.length });
       return;
+    }
+    const clientDocumentPrint = url.pathname.match(/^\/api\/v1\/client\/documents\/([^/]+)\/print$/);
+    if (request.method === 'GET' && clientDocumentPrint) {
+      const account = await currentOwner(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const document = await db.generatedDocument.findFirst({ where: { id: decodeURIComponent(clientDocumentPrint[1]), organizationId: config.organizationId, ownerId: account.owner.id, revokedAt: null } });
+      if (!document) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      const status = document.state === 'SIGNED' ? `Подписано ${document.signedAt?.toLocaleString('ru-RU') ?? ''}` : 'Ожидает подтверждения';
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" });
+      response.end(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safeDocumentValue(document.title)}</title><style>body{margin:0;background:#eef3ef;color:#10211f;font:16px/1.6 Inter,system-ui,sans-serif}.page{max-width:760px;margin:40px auto;padding:54px;background:#fff;border-radius:24px;box-shadow:0 22px 80px #0b494d1a}.brand{font-weight:900;letter-spacing:-.07em;color:#07555a}.meta{margin:24px 0;padding:14px;border-radius:12px;background:#c9f8d9;font-size:13px}.hash{overflow-wrap:anywhere;color:#6d7773;font-size:11px}h1{font-size:38px;line-height:1.05;letter-spacing:-.055em}@media(max-width:700px){.page{margin:0;padding:28px 20px;border-radius:0;min-height:100svh}h1{font-size:31px}}@media print{body{background:#fff}.page{margin:0;box-shadow:none}}</style></head><body><main class="page"><div class="brand">ВЕТ✦СВЕТ</div><h1>${safeDocumentValue(document.title)}</h1><div class="meta">Версия ${safeDocumentValue(document.documentVersion)} · ${safeDocumentValue(status)}</div>${document.renderedBody}<hr><p class="hash">Контрольная сумма документа: ${safeDocumentValue(document.contentHash)}</p></main></body></html>`); return;
+    }
+    const clientDocumentSign = url.pathname.match(/^\/api\/v1\/client\/documents\/([^/]+)\/sign$/);
+    if (request.method === 'POST' && clientDocumentSign) {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { signerName?: string; accepted?: boolean } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const signerName = String(input.signerName ?? '').trim();
+      const document = await db.generatedDocument.findFirst({ where: { id: decodeURIComponent(clientDocumentSign[1]), organizationId: config.organizationId, ownerId: account.owner.id, revokedAt: null } });
+      if (!document) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      if (document.state !== 'AWAITING_SIGNATURE') { json(response, 409, { error: 'DOCUMENT_NOT_AWAITING_SIGNATURE' }); return; }
+      if (input.accepted !== true || signerName.length < 2 || signerName.toLocaleLowerCase('ru-RU') !== account.owner.fullName.trim().toLocaleLowerCase('ru-RU')) { json(response, 400, { error: 'SIGNATURE_CONFIRMATION_REQUIRED' }); return; }
+      const signedAt = new Date();
+      const result = await db.$transaction(async (tx) => {
+        const consent = await tx.consent.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: document.petId, documentId: document.id, appointmentId: document.appointmentId, caseId: document.caseId, documentVersion: document.documentVersion, purpose: document.kind, state: 'SIGNED', signerName, source: 'CLIENT_WEB', signedAt, proofMetadata: { contentHash: document.contentHash, userId: account.current.userId, userAgent: String(request.headers['user-agent'] ?? '').slice(0, 500), forwardedFor: String(request.headers['x-forwarded-for'] ?? '').split(',')[0].trim().slice(0, 100) } } });
+        await tx.generatedDocument.update({ where: { id: document.id }, data: { state: 'SIGNED', signedAt } });
+        return consent;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'document.signed', aggregateType: 'GeneratedDocument', aggregateId: document.id, idempotencyKey: key, payload: { consentId: result.id, contentHash: document.contentHash } });
+      json(response, 200, { document: { id: document.id, state: 'SIGNED', signedAt }, consentId: result.id }); return;
     }
     if (request.method === 'PATCH' && url.pathname === '/api/v1/client/profile') {
       const account = await currentOwner(request); const key = idempotencyKey(request);
@@ -509,7 +590,13 @@ const server = createServer(async (request, response) => {
       if (conflict) { json(response, 409, { error: 'DUPLICATE_APPOINTMENT_REQUEST' }); return; }
       const result = await db.$transaction(async (tx) => {
         const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
-        const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: variant.priceMinor > 0 ? 'ISSUED' : 'PENDING_QUOTE', totalMinor: variant.priceMinor, currency: variant.currency } });
+        const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: variant.priceMinor > 0 ? 'ISSUED' : 'DRAFT', totalMinor: variant.priceMinor, currency: variant.currency, issuedAt: variant.priceMinor > 0 ? new Date() : null, lines: { create: { organizationId: config.organizationId, lineType: 'SERVICE', referenceId: variant.id, description: `${variant.service.publicName} · ${variant.name}`, unitPriceMinor: variant.priceMinor, totalMinor: variant.priceMinor } } } });
+        const kind = variant.service.kind === 'GROOMING' ? 'GROOMING_CONSENT' : 'PROCEDURE_CONSENT';
+        const template = await tx.printTemplate.findFirst({ where: { organizationId: config.organizationId, kind, state: 'PUBLISHED' }, orderBy: { version: 'desc' } });
+        if (template) {
+          const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` });
+          await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Согласие VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.current.userId } });
+        }
         return { appointment, invoice };
       });
       await auditCommand({ actorId: account.current.userId, action: 'appointment.requested', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { petId: relation.petId, variantId: variant.id } });
@@ -535,8 +622,13 @@ const server = createServer(async (request, response) => {
       const secret = randomBytes(24).toString('base64url');
       const result = await db.$transaction(async (tx) => {
         const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
-        const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: 'PENDING_PAYMENT_REVIEW', totalMinor: variant.priceMinor, currency: variant.currency } });
+        const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: 'PENDING_PAYMENT_REVIEW', totalMinor: variant.priceMinor, currency: variant.currency, issuedAt: new Date(), lines: { create: { organizationId: config.organizationId, lineType: 'SERVICE', referenceId: variant.id, description: `${variant.service.publicName} · ${variant.name}`, unitPriceMinor: variant.priceMinor, totalMinor: variant.priceMinor } } } });
         const consultation = await tx.consultation.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, question, paymentTokenHash: digest(secret), paymentTokenExpiresAt: new Date(Date.now() + 48 * 60 * 60_000) } });
+        const template = await tx.printTemplate.findFirst({ where: { organizationId: config.organizationId, kind: 'REMOTE_CONSULTATION_CONSENT', state: 'PUBLISHED' }, orderBy: { version: 'desc' } });
+        if (template) {
+          const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` });
+          await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Условия консультации', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.current.userId } });
+        }
         return { appointment, invoice, consultation };
       });
       await auditCommand({ actorId: account.current.userId, action: 'consultation.requested', aggregateType: 'Consultation', aggregateId: result.consultation.id, idempotencyKey: key, payload: { appointmentId: result.appointment.id, petId: relation.petId } });
@@ -571,6 +663,121 @@ const server = createServer(async (request, response) => {
       const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item])); const consultationByAppointment = new Map(consultations.map((item) => [item.appointmentId, item])); const encounterByAppointment = new Map(encounters.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const hospitalizationByAppointment = new Map(hospitalizations.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
       json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', hospitalization: hospitalizationByAppointment.get(item.id) ? { id: hospitalizationByAppointment.get(item.id)!.id, state: hospitalizationByAppointment.get(item.id)!.state } : undefined, encounter: encounterByAppointment.get(item.id) ? { id: encounterByAppointment.get(item.id)!.id, state: encounterByAppointment.get(item.id)!.state, assessment: encounterByAppointment.get(item.id)!.assessment, plan: encounterByAppointment.get(item.id)!.plan } : undefined, consultation: consultationByAppointment.get(item.id) ? { id: consultationByAppointment.get(item.id)!.id, state: consultationByAppointment.get(item.id)!.state, paymentState: consultationByAppointment.get(item.id)!.paymentState, question: consultationByAppointment.get(item.id)!.question, response: consultationByAppointment.get(item.id)!.response } : undefined, groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
     }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/finance/dashboard') {
+      const account = await currentStaff(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(account.membership.role)) { json(response, 403, { error: 'FINANCE_ROLE_REQUIRED' }); return; }
+      const [invoices, templates] = await Promise.all([
+        db.invoice.findMany({ where: { organizationId: config.organizationId }, include: { owner: true, lines: { orderBy: { createdAt: 'asc' } }, payments: { orderBy: { createdAt: 'desc' } }, fiscalReceipts: { orderBy: { createdAt: 'desc' } }, documents: { orderBy: { createdAt: 'desc' } } }, orderBy: { createdAt: 'desc' }, take: 80 }),
+        db.printTemplate.findMany({ where: { organizationId: config.organizationId, state: 'PUBLISHED' }, orderBy: [{ kind: 'asc' }, { version: 'desc' }] })
+      ]);
+      const appointmentIds = invoices.flatMap((invoice) => invoice.appointmentId ? [invoice.appointmentId] : []);
+      const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, id: { in: appointmentIds } } });
+      const pets = await db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((appointment) => appointment.petId) } } });
+      const appointmentById = new Map(appointments.map((appointment) => [appointment.id, appointment])); const petById = new Map(pets.map((pet) => [pet.id, pet]));
+      json(response, 200, { invoices: invoices.map((invoice) => { const appointment = invoice.appointmentId ? appointmentById.get(invoice.appointmentId) : undefined; return { id: invoice.id, ownerId: invoice.ownerId, owner: invoice.owner.fullName, petId: appointment?.petId, pet: appointment ? petById.get(appointment.petId)?.name : undefined, appointmentId: invoice.appointmentId, state: invoice.state, totalMinor: invoice.totalMinor, paidMinor: invoice.paidMinor, currency: invoice.currency, createdAt: invoice.createdAt, lines: invoice.lines, payments: invoice.payments, receipts: invoice.fiscalReceipts, documents: invoice.documents.map((document) => ({ id: document.id, kind: document.kind, title: document.title, state: document.state, documentVersion: document.documentVersion })) }; }), templates: templates.map((template) => ({ id: template.id, kind: template.kind, title: template.title, version: template.version })) }); return;
+    }
+    const staffInvoiceLines = url.pathname.match(/^\/api\/v1\/staff\/finance\/invoices\/([^/]+)\/lines$/);
+    if (request.method === 'POST' && staffInvoiceLines) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(account.membership.role)) { json(response, 403, { error: 'FINANCE_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { lineType?: string; referenceId?: string; description?: string; quantityMilli?: number; unitPriceMinor?: number; discountMinor?: number; taxCode?: string; performerId?: string; costBasisMinor?: number } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const lineType = String(input.lineType ?? '').toUpperCase(); const description = String(input.description ?? '').trim(); const quantityMilli = Math.round(Number(input.quantityMilli ?? 1000)); const unitPriceMinor = Math.round(Number(input.unitPriceMinor ?? 0)); const discountMinor = Math.round(Number(input.discountMinor ?? 0));
+      if (!['SERVICE', 'PRODUCT', 'MEDICATION', 'PACKAGE', 'DISCOUNT'].includes(lineType) || description.length < 2 || description.length > 500 || quantityMilli <= 0 || quantityMilli > 1_000_000_000 || unitPriceMinor < 0 || unitPriceMinor > 100_000_000 || discountMinor < 0) { json(response, 400, { error: 'INVALID_INVOICE_LINE' }); return; }
+      const repeatedLine = await db.invoiceLine.findUnique({ where: { idempotencyKey: key }, include: { invoice: true } });
+      if (repeatedLine) {
+        if (repeatedLine.invoiceId !== decodeURIComponent(staffInvoiceLines[1])) { json(response, 409, { error: 'IDEMPOTENCY_KEY_REUSED' }); return; }
+        json(response, 200, { line: repeatedLine, invoice: { id: repeatedLine.invoice.id, state: repeatedLine.invoice.state, totalMinor: repeatedLine.invoice.totalMinor, paidMinor: repeatedLine.invoice.paidMinor } }); return;
+      }
+      const lineTotal = Math.max(0, Math.round(quantityMilli * unitPriceMinor / 1000) - discountMinor);
+      const currentInvoice = await db.invoice.findFirst({ where: { id: decodeURIComponent(staffInvoiceLines[1]), organizationId: config.organizationId } });
+      if (!currentInvoice) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      if (['PAID', 'VOID', 'REFUNDED'].includes(currentInvoice.state)) { json(response, 409, { error: 'INVOICE_LOCKED' }); return; }
+      const result = await db.$transaction(async (tx) => {
+        const invoice = await tx.invoice.findUniqueOrThrow({ where: { id: currentInvoice.id } });
+        const line = await tx.invoiceLine.create({ data: { organizationId: config.organizationId, invoiceId: invoice.id, lineType, referenceId: String(input.referenceId ?? '').trim() || null, description, quantityMilli, unitPriceMinor, discountMinor, totalMinor: lineTotal, taxCode: String(input.taxCode ?? '').trim() || null, performerId: String(input.performerId ?? '').trim() || null, costBasisMinor: Number.isFinite(input.costBasisMinor) ? Math.max(0, Math.round(Number(input.costBasisMinor))) : null, idempotencyKey: key } });
+        const aggregate = await tx.invoiceLine.aggregate({ where: { invoiceId: invoice.id }, _sum: { totalMinor: true } });
+        const totalMinor = aggregate._sum.totalMinor ?? 0;
+        const updated = await tx.invoice.update({ where: { id: invoice.id }, data: { totalMinor, state: invoiceState(totalMinor, invoice.paidMinor, Boolean(invoice.issuedAt)) } });
+        return { line, invoice: updated };
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'invoice.line_added', aggregateType: 'Invoice', aggregateId: result.invoice.id, idempotencyKey: key, payload: { lineId: result.line.id, totalMinor: result.invoice.totalMinor } });
+      json(response, 201, { line: result.line, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor, paidMinor: result.invoice.paidMinor } }); return;
+    }
+    const staffInvoice = url.pathname.match(/^\/api\/v1\/staff\/finance\/invoices\/([^/]+)$/);
+    if (request.method === 'PATCH' && staffInvoice) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(account.membership.role)) { json(response, 403, { error: 'FINANCE_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { action?: string; amountMinor?: number; method?: string; providerTransactionId?: string; dueAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const action = String(input.action ?? '').toUpperCase(); const invoiceId = decodeURIComponent(staffInvoice[1]);
+      if (action === 'ISSUE') {
+        const invoice = await db.invoice.findFirst({ where: { id: invoiceId, organizationId: config.organizationId }, include: { lines: true } });
+        if (!invoice) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+        if (!['DRAFT', 'PENDING_QUOTE', 'ISSUED'].includes(invoice.state) || !invoice.lines.length || invoice.totalMinor < 0) { json(response, 409, { error: 'INVOICE_NOT_READY' }); return; }
+        const dueAt = input.dueAt ? new Date(input.dueAt) : null; if (dueAt && Number.isNaN(dueAt.valueOf())) { json(response, 400, { error: 'INVALID_DUE_DATE' }); return; }
+        const updated = await db.invoice.update({ where: { id: invoice.id }, data: { state: invoiceState(invoice.totalMinor, invoice.paidMinor, true), issuedAt: invoice.issuedAt ?? new Date(), dueAt } });
+        await auditCommand({ actorId: account.current.userId, action: 'invoice.issued', aggregateType: 'Invoice', aggregateId: invoice.id, idempotencyKey: key, payload: { totalMinor: invoice.totalMinor } });
+        json(response, 200, { invoice: updated }); return;
+      }
+      if (action === 'RECORD_PAYMENT') {
+        const amountMinor = Math.round(Number(input.amountMinor ?? 0)); const method = String(input.method ?? 'SBP').toUpperCase();
+        if (amountMinor <= 0 || amountMinor > 100_000_000 || !['CASH', 'CARD', 'SBP', 'TRANSFER'].includes(method)) { json(response, 400, { error: 'INVALID_PAYMENT' }); return; }
+        const providerTransactionId = String(input.providerTransactionId ?? '').trim() || key;
+        const repeatedPayment = await db.payment.findUnique({ where: { organizationId_provider_providerTransactionId: { organizationId: config.organizationId, provider: 'MANUAL', providerTransactionId } }, include: { invoice: true, fiscalReceipts: true } });
+        if (repeatedPayment) {
+          if (repeatedPayment.invoiceId !== invoiceId || repeatedPayment.amountMinor !== amountMinor) { json(response, 409, { error: 'PAYMENT_REFERENCE_REUSED' }); return; }
+          json(response, 200, { invoice: repeatedPayment.invoice, payment: repeatedPayment, fiscalReceipt: repeatedPayment.fiscalReceipts[0] }); return;
+        }
+        const currentInvoice = await db.invoice.findFirst({ where: { id: invoiceId, organizationId: config.organizationId } });
+        if (!currentInvoice) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+        if (!['ISSUED', 'PARTIALLY_PAID', 'PENDING_PAYMENT_REVIEW'].includes(currentInvoice.state) || currentInvoice.paidMinor + amountMinor > currentInvoice.totalMinor) { json(response, 409, { error: 'PAYMENT_EXCEEDS_BALANCE' }); return; }
+        const result = await db.$transaction(async (tx) => {
+          const invoice = await tx.invoice.findUniqueOrThrow({ where: { id: currentInvoice.id } });
+          const payment = await tx.payment.create({ data: { organizationId: config.organizationId, invoiceId: invoice.id, provider: 'MANUAL', providerTransactionId, amountMinor, currency: invoice.currency, state: 'CONFIRMED', method, confirmedAt: new Date() } });
+          const paidMinor = invoice.paidMinor + amountMinor;
+          const updated = await tx.invoice.update({ where: { id: invoice.id }, data: { paidMinor, state: invoiceState(invoice.totalMinor, paidMinor, true) } });
+          const receipt = await tx.fiscalReceipt.create({ data: { organizationId: config.organizationId, invoiceId: invoice.id, paymentId: payment.id, state: 'PENDING_PROVIDER', idempotencyKey: `manual-payment:${key}` } });
+          return { invoice: updated, payment, receipt };
+        });
+        await auditCommand({ actorId: account.current.userId, action: 'payment.confirmed_manually', aggregateType: 'Invoice', aggregateId: result.invoice.id, idempotencyKey: key, payload: { paymentId: result.payment.id, amountMinor, receiptState: result.receipt.state } });
+        json(response, 200, { invoice: result.invoice, payment: result.payment, fiscalReceipt: result.receipt }); return;
+      }
+      if (action === 'VOID') {
+        const invoice = await db.invoice.findFirst({ where: { id: invoiceId, organizationId: config.organizationId } });
+        if (!invoice) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+        if (invoice.paidMinor > 0 || ['PAID', 'REFUNDED'].includes(invoice.state)) { json(response, 409, { error: 'PAID_INVOICE_CANNOT_BE_VOIDED' }); return; }
+        const updated = await db.invoice.update({ where: { id: invoice.id }, data: { state: 'VOID' } });
+        await auditCommand({ actorId: account.current.userId, action: 'invoice.voided', aggregateType: 'Invoice', aggregateId: invoice.id, idempotencyKey: key });
+        json(response, 200, { invoice: updated }); return;
+      }
+      json(response, 400, { error: 'UNKNOWN_INVOICE_ACTION' }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/staff/documents') {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!['ADMIN', 'MANAGER', 'VETERINARIAN', 'GROOMER', 'RECEPTIONIST'].includes(account.membership.role)) { json(response, 403, { error: 'DOCUMENT_ROLE_REQUIRED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      const repeatedDocument = await db.generatedDocument.findUnique({ where: { idempotencyKey: key } });
+      if (repeatedDocument) { json(response, 200, { document: { id: repeatedDocument.id, title: repeatedDocument.title, state: repeatedDocument.state, documentVersion: repeatedDocument.documentVersion } }); return; }
+      let input: { ownerId?: string; petId?: string; appointmentId?: string; invoiceId?: string; kind?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const kind = String(input.kind ?? '').toUpperCase();
+      const [owner, relation, template, invoice] = await Promise.all([
+        db.owner.findFirst({ where: { id: String(input.ownerId ?? ''), organizationId: config.organizationId } }),
+        db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: String(input.ownerId ?? ''), petId: String(input.petId ?? '') }, include: { pet: true } }),
+        db.printTemplate.findFirst({ where: { organizationId: config.organizationId, kind, state: 'PUBLISHED' }, orderBy: { version: 'desc' } }),
+        input.invoiceId ? db.invoice.findFirst({ where: { id: String(input.invoiceId), organizationId: config.organizationId } }) : Promise.resolve(null)
+      ]);
+      if (!owner || !relation || !template || (input.invoiceId && !invoice)) { json(response, 400, { error: 'INVALID_DOCUMENT_CONTEXT' }); return; }
+      if (invoice && invoice.ownerId !== owner.id) { json(response, 403, { error: 'INVOICE_OWNER_MISMATCH' }); return; }
+      const renderedBody = renderDocumentBody(template.body, { owner: owner.fullName, pet: relation.pet.name, service: 'согласованный план помощи', amount: invoice ? `${(invoice.totalMinor / 100).toLocaleString('ru-RU')} ₽` : 'по согласованному расчёту' });
+      const document = await db.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: owner.id, petId: relation.petId, appointmentId: String(input.appointmentId ?? '').trim() || null, invoiceId: invoice?.id, kind: template.kind, title: template.title ?? 'Документ VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), idempotencyKey: key, createdBy: account.current.userId } });
+      await auditCommand({ actorId: account.current.userId, action: 'document.generated', aggregateType: 'GeneratedDocument', aggregateId: document.id, idempotencyKey: key, payload: { kind, ownerId: owner.id, contentHash: document.contentHash } });
+      json(response, 201, { document: { id: document.id, title: document.title, state: document.state, documentVersion: document.documentVersion } }); return;
+    }
     const staffAppointment = url.pathname.match(/^\/api\/v1\/staff\/appointments\/([^/]+)$/);
     if (request.method === 'PATCH' && staffAppointment) {
       const account = await currentStaff(request); const key = idempotencyKey(request);
@@ -584,6 +791,8 @@ const server = createServer(async (request, response) => {
         if (appointment.state !== 'REQUESTED') { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
         const consultation = await db.consultation.findUnique({ where: { appointmentId: appointment.id } });
         if (consultation && consultation.paymentState !== 'CONFIRMED') { json(response, 409, { error: 'CONSULTATION_PAYMENT_REQUIRED' }); return; }
+        const unsignedDocument = await db.generatedDocument.findFirst({ where: { organizationId: config.organizationId, appointmentId: appointment.id, state: 'AWAITING_SIGNATURE' } });
+        if (unsignedDocument) { json(response, 409, { error: 'OWNER_SIGNATURE_REQUIRED' }); return; }
         const overlap = await db.appointment.findFirst({ where: { organizationId: config.organizationId, staffId: account.current.userId, state: { in: ['CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: appointment.endsAt }, endsAt: { gt: appointment.startsAt } } });
         if (overlap) { json(response, 409, { error: 'STAFF_TIME_CONFLICT' }); return; }
         const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CONFIRMED', staffId: account.current.userId } });
@@ -974,4 +1183,4 @@ const server = createServer(async (request, response) => {
   } catch (error) { console.error(error); json(response, 500, { error: 'INTERNAL_ERROR' }); }
 });
 
-ensureOrganization().then(ensureBookingFoundation).then(() => server.listen(config.port, '127.0.0.1', () => console.log(`VetSvet production server on ${config.port}`))).catch((error) => { console.error(error); process.exit(1); });
+ensureOrganization().then(ensureBookingFoundation).then(ensureDocumentFoundation).then(() => server.listen(config.port, '127.0.0.1', () => console.log(`VetSvet production server on ${config.port}`))).catch((error) => { console.error(error); process.exit(1); });

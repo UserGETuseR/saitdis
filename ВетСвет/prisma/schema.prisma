@@ -8,76 +8,78 @@ datasource db {
 }
 
 model Organization {
-  id          String   @id @default(uuid())
-  legalName   String
-  displayName String
-  createdAt   DateTime @default(now())
-  locations   Location[]
-  memberships StaffMembership[]
-  owners      Owner[]
-  pets        Pet[]
-  audits      AuditEvent[]
-  outbox      OutboxEvent[]
-  surgicalCases SurgicalCase[]
-  anesthesiaRecords AnesthesiaRecord[]
-  dentalCharts DentalChart[]
-  equipment Equipment[]
+  id                 String              @id @default(uuid())
+  legalName          String
+  displayName        String
+  createdAt          DateTime            @default(now())
+  locations          Location[]
+  memberships        StaffMembership[]
+  owners             Owner[]
+  pets               Pet[]
+  audits             AuditEvent[]
+  outbox             OutboxEvent[]
+  surgicalCases      SurgicalCase[]
+  anesthesiaRecords  AnesthesiaRecord[]
+  dentalCharts       DentalChart[]
+  equipment          Equipment[]
   physicalIdentities PhysicalIdentity[]
-  labOrders LabOrder[]
-  specimens Specimen[]
-  suppliers Supplier[]
-  purchaseOrders PurchaseOrder[]
-  printTemplates PrintTemplate[]
-  printJobs PrintJob[]
+  labOrders          LabOrder[]
+  specimens          Specimen[]
+  suppliers          Supplier[]
+  purchaseOrders     PurchaseOrder[]
+  printTemplates     PrintTemplate[]
+  printJobs          PrintJob[]
   checklistTemplates ChecklistTemplate[]
-  checklistRuns ChecklistRun[]
-  staffProfiles StaffProfile[]
-  credentials Credential[]
-  prechecks Precheck[]
-  hospitalBeds HospitalBed[]
-  hospitalizations Hospitalization[]
-  inventoryItems InventoryItem[]
-  stockLots StockLot[]
-  stockMovements StockMovement[]
+  checklistRuns      ChecklistRun[]
+  staffProfiles      StaffProfile[]
+  credentials        Credential[]
+  prechecks          Precheck[]
+  hospitalBeds       HospitalBed[]
+  hospitalizations   Hospitalization[]
+  inventoryItems     InventoryItem[]
+  stockLots          StockLot[]
+  stockMovements     StockMovement[]
 }
 
 model Location {
-  id             String       @id @default(uuid())
+  id             String          @id @default(uuid())
   organizationId String
   name           String
   timezone       String
-  active         Boolean      @default(true)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  @@index([organizationId])
+  active         Boolean         @default(true)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   equipment      Equipment[]
   hospitalBeds   HospitalBed[]
   stockLots      StockLot[]
   stockMovements StockMovement[]
+
+  @@index([organizationId])
 }
 
 model UserIdentity {
-  id             String            @id @default(uuid())
-  login          String?           @unique
-  phone          String?           @unique
-  email          String?           @unique
-  telegramUserId String?           @unique
-  passwordHash   String?
+  id                String            @id @default(uuid())
+  login             String?           @unique
+  phone             String?           @unique
+  email             String?           @unique
+  telegramUserId    String?           @unique
+  passwordHash      String?
   passwordUpdatedAt DateTime?
-  createdAt      DateTime          @default(now())
-  memberships    StaffMembership[]
-  sessions       AuthSession[]
-  owners         Owner[]
+  createdAt         DateTime          @default(now())
+  memberships       StaffMembership[]
+  sessions          AuthSession[]
+  owners            Owner[]
 }
 
 model AuthOtpChallenge {
-  id         String   @id @default(uuid())
-  identity   String
-  purpose    String
-  codeHash   String
-  attempts   Int      @default(0)
-  state      String   @default("PENDING")
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
+  id        String   @id @default(uuid())
+  identity  String
+  purpose   String
+  codeHash  String
+  attempts  Int      @default(0)
+  state     String   @default("PENDING")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
   @@index([identity, state, expiresAt])
 }
 
@@ -92,37 +94,40 @@ model AuthSession {
   expiresAt   DateTime
   revokedAt   DateTime?
   user        UserIdentity @relation(fields: [userId], references: [id], onDelete: Restrict)
+
   @@index([userId, state, expiresAt])
 }
 
 model TelegramLoginRequest {
-  id             String   @id @default(uuid())
-  tokenHash      String   @unique
-  state          String   @default("PENDING")
-  mode           String   @default("CLIENT")
+  id             String    @id @default(uuid())
+  tokenHash      String    @unique
+  state          String    @default("PENDING")
+  mode           String    @default("CLIENT")
   staffInviteId  String?
   telegramUserId String?
   chatId         String?
   expiresAt      DateTime
   confirmedAt    DateTime?
   consumedAt     DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
+
   @@index([state, expiresAt])
   @@index([telegramUserId])
   @@index([staffInviteId, state])
 }
 
 model StaffInvite {
-  id             String   @id @default(uuid())
-  organizationId String
-  tokenHash      String   @unique
-  fullName       String
-  role           String
-  state          String   @default("PENDING")
-  expiresAt      DateTime
-  acceptedAt     DateTime?
+  id               String    @id @default(uuid())
+  organizationId   String
+  tokenHash        String    @unique
+  fullName         String
+  role             String
+  state            String    @default("PENDING")
+  expiresAt        DateTime
+  acceptedAt       DateTime?
   acceptedByUserId String?
-  createdAt      DateTime @default(now())
+  createdAt        DateTime  @default(now())
+
   @@index([organizationId, state, expiresAt])
 }
 
@@ -135,45 +140,48 @@ model TelegramAdminChat {
 }
 
 model AdminEnrollment {
-  id             String   @id @default(uuid())
-  tokenHash      String   @unique
+  id             String    @id @default(uuid())
+  tokenHash      String    @unique
   label          String
-  state          String   @default("PENDING")
+  state          String    @default("PENDING")
   expiresAt      DateTime
   consumedAt     DateTime?
   telegramUserId String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
+
   @@index([state, expiresAt])
 }
 
 model TelegramRequest {
-  id             String   @id @default(uuid())
+  id             String                @id @default(uuid())
   telegramUserId String
   chatId         String
   kind           String
   message        String
   state          String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
   paymentProof   TelegramPaymentProof?
+
   @@index([telegramUserId, state, createdAt])
 }
 
 model TelegramPaymentProof {
-  id              String   @id @default(uuid())
-  requestId       String?  @unique
-  consultationId  String?  @unique
-  telegramUserId  String
-  chatId          String
-  sourceMessageId Int
-  purpose         String
-  state           String   @default("PENDING_REVIEW")
+  id               String           @id @default(uuid())
+  requestId        String?          @unique
+  consultationId   String?          @unique
+  telegramUserId   String
+  chatId           String
+  sourceMessageId  Int
+  purpose          String
+  state            String           @default("PENDING_REVIEW")
   reviewedByChatId String?
-  reviewedAt      DateTime?
-  reviewNote      String?
-  createdAt       DateTime @default(now())
-  request         TelegramRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
-  consultation    Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime?
+  reviewNote       String?
+  createdAt        DateTime         @default(now())
+  request          TelegramRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  consultation     Consultation?    @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+
   @@index([state, createdAt])
   @@index([telegramUserId, chatId])
 }
@@ -186,156 +194,193 @@ model StaffMembership {
   state          String       @default("ACTIVE")
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user           UserIdentity @relation(fields: [userId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, userId])
   @@index([organizationId, role])
 }
 
 model Owner {
-  id             String       @id @default(uuid())
-  organizationId String
-  userId         String?
-  fullName       String
-  phone          String?
-  email          String?
-  telegramUserId String?
-  createdAt      DateTime     @default(now())
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  user           UserIdentity? @relation(fields: [userId], references: [id], onDelete: Restrict)
-  relations      OwnerPetRelation[]
-  invoices       Invoice[]
-  consultations  Consultation[]
+  id               String             @id @default(uuid())
+  organizationId   String
+  userId           String?
+  fullName         String
+  phone            String?
+  email            String?
+  telegramUserId   String?
+  createdAt        DateTime           @default(now())
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user             UserIdentity?      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  relations        OwnerPetRelation[]
+  invoices         Invoice[]
+  consultations    Consultation[]
   hospitalizations Hospitalization[]
-  consents       Consent[]
-  surgicalCases  SurgicalCase[]
-  dentalCharts   DentalChart[]
-  @@index([organizationId, phone])
+  consents         Consent[]
+  surgicalCases    SurgicalCase[]
+  dentalCharts     DentalChart[]
+
   @@unique([organizationId, telegramUserId])
   @@unique([organizationId, userId])
+  @@index([organizationId, phone])
 }
 
 model Pet {
-  id             String       @id @default(uuid())
-  organizationId String
-  name           String
-  species        String
-  lifecycle      String       @default("ACTIVE")
-  medicalAlerts  Json?
-  createdAt      DateTime     @default(now())
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  relations      OwnerPetRelation[]
-  cases          ClinicalCase[]
-  surgicalCases  SurgicalCase[]
-  dentalCharts   DentalChart[]
-  labOrders      LabOrder[]
-  consultations  Consultation[]
+  id               String             @id @default(uuid())
+  organizationId   String
+  name             String
+  species          String
+  lifecycle        String             @default("ACTIVE")
+  medicalAlerts    Json?
+  createdAt        DateTime           @default(now())
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  relations        OwnerPetRelation[]
+  cases            ClinicalCase[]
+  surgicalCases    SurgicalCase[]
+  dentalCharts     DentalChart[]
+  labOrders        LabOrder[]
+  consultations    Consultation[]
   hospitalizations Hospitalization[]
-  specimens      Specimen[]
+  specimens        Specimen[]
+
   @@index([organizationId, name])
 }
 
 model OwnerPetRelation {
-  id             String @id @default(uuid())
+  id             String  @id @default(uuid())
   organizationId String
   ownerId        String
   petId          String
   relation       String
   primary        Boolean @default(false)
-  owner          Owner  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet            Pet    @relation(fields: [petId], references: [id], onDelete: Restrict)
+  owner          Owner   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet     @relation(fields: [petId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, ownerId, petId])
 }
 
 model Service {
-  id             String @id @default(uuid())
+  id             String           @id @default(uuid())
   organizationId String
   publicName     String
   internalName   String
   kind           String
-  onlineBookable Boolean @default(true)
+  onlineBookable Boolean          @default(true)
   variants       ServiceVariant[]
+
   @@index([organizationId, kind])
 }
 
 model ServiceVariant {
-  id                  String @id @default(uuid())
+  id                  String  @id @default(uuid())
   organizationId      String
   serviceId           String
   name                String
   durationMinutes     Int
-  bufferBeforeMinutes Int    @default(0)
-  bufferAfterMinutes  Int    @default(0)
+  bufferBeforeMinutes Int     @default(0)
+  bufferAfterMinutes  Int     @default(0)
   priceMinor          Int
-  depositMinor        Int    @default(0)
-  currency            String @default("RUB")
+  depositMinor        Int     @default(0)
+  currency            String  @default("RUB")
   allowedSpecies      Json
   service             Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, serviceId])
 }
 
 model Appointment {
-  id             String   @id @default(uuid())
-  organizationId String
-  locationId     String
-  ownerId        String
-  petId          String
-  variantId      String
-  staffId        String
-  startsAt       DateTime
-  endsAt         DateTime
-  state          String
-  createdAt      DateTime @default(now())
-  consultation   Consultation?
-  encounter      Encounter?
+  id              String           @id @default(uuid())
+  organizationId  String
+  locationId      String
+  ownerId         String
+  petId           String
+  variantId       String
+  staffId         String
+  startsAt        DateTime
+  endsAt          DateTime
+  state           String
+  createdAt       DateTime         @default(now())
+  consultation    Consultation?
+  encounter       Encounter?
   hospitalization Hospitalization?
+
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
 }
 
 model Consultation {
-  id                    String   @id @default(uuid())
+  id                    String                @id @default(uuid())
   organizationId        String
   ownerId               String
   petId                 String
-  appointmentId         String   @unique
+  appointmentId         String                @unique
   question              String
-  preferredChannel      String   @default("TELEGRAM")
-  state                 String   @default("WAITING_PAYMENT")
-  paymentState          String   @default("AWAITING_PROOF")
-  paymentTokenHash      String   @unique
+  preferredChannel      String                @default("TELEGRAM")
+  state                 String                @default("WAITING_PAYMENT")
+  paymentState          String                @default("AWAITING_PROOF")
+  paymentTokenHash      String                @unique
   paymentTokenExpiresAt DateTime
   telegramUserId        String?
   telegramChatId        String?
   staffId               String?
   response              String?
   respondedAt           DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  owner                 Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet                   Pet      @relation(fields: [petId], references: [id], onDelete: Restrict)
-  appointment           Appointment @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  owner                 Owner                 @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet                   Pet                   @relation(fields: [petId], references: [id], onDelete: Restrict)
+  appointment           Appointment           @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
   paymentProof          TelegramPaymentProof?
+
   @@index([organizationId, ownerId, state, createdAt])
   @@index([organizationId, petId, createdAt])
   @@index([organizationId, paymentState, createdAt])
 }
 
 model Invoice {
-  id             String   @id @default(uuid())
+  id             String              @id @default(uuid())
   organizationId String
   ownerId        String
-  appointmentId  String?  @unique
+  appointmentId  String?             @unique
   state          String
   totalMinor     Int
-  paidMinor      Int      @default(0)
-  currency       String   @default("RUB")
-  createdAt      DateTime @default(now())
-  owner          Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  paidMinor      Int                 @default(0)
+  currency       String              @default("RUB")
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @default(now()) @updatedAt
+  issuedAt       DateTime?
+  dueAt          DateTime?
+  owner          Owner               @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  lines          InvoiceLine[]
   payments       Payment[]
+  fiscalReceipts FiscalReceipt[]
+  documents      GeneratedDocument[]
+
   @@index([organizationId, ownerId])
 }
 
+model InvoiceLine {
+  id             String   @id @default(uuid())
+  organizationId String
+  invoiceId      String
+  lineType       String
+  referenceId    String?
+  description    String
+  quantityMilli  Int      @default(1000)
+  unitPriceMinor Int
+  discountMinor  Int      @default(0)
+  totalMinor     Int
+  taxCode        String?
+  performerId    String?
+  costBasisMinor Int?
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, invoiceId, createdAt])
+  @@index([organizationId, referenceId])
+}
+
 model Payment {
-  id                    String   @id @default(uuid())
+  id                    String          @id @default(uuid())
   organizationId        String
   invoiceId             String
   provider              String
@@ -343,9 +388,33 @@ model Payment {
   amountMinor           Int
   currency              String
   state                 String
-  createdAt             DateTime @default(now())
-  invoice               Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  method                String          @default("MANUAL")
+  confirmedAt           DateTime?
+  createdAt             DateTime        @default(now())
+  invoice               Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  fiscalReceipts        FiscalReceipt[]
+
   @@unique([organizationId, provider, providerTransactionId])
+}
+
+model FiscalReceipt {
+  id             String   @id @default(uuid())
+  organizationId String
+  invoiceId      String
+  paymentId      String?
+  receiptType    String   @default("PAYMENT")
+  state          String   @default("PENDING_PROVIDER")
+  provider       String?
+  externalId     String?
+  idempotencyKey String   @unique
+  failureReason  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payment        Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, state, createdAt])
+  @@index([organizationId, invoiceId])
 }
 
 model ClinicalCase {
@@ -358,14 +427,15 @@ model ClinicalCase {
   openedAt       DateTime    @default(now())
   pet            Pet         @relation(fields: [petId], references: [id], onDelete: Restrict)
   encounters     Encounter[]
+
   @@index([organizationId, petId, openedAt])
 }
 
 model Encounter {
-  id             String       @id @default(uuid())
+  id             String         @id @default(uuid())
   organizationId String
   caseId         String
-  appointmentId  String?      @unique
+  appointmentId  String?        @unique
   petId          String
   version        Int
   state          String
@@ -376,9 +446,10 @@ model Encounter {
   clinicianId    String
   finalizedAt    DateTime?
   amendmentOfId  String?
-  clinicalCase   ClinicalCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  clinicalCase   ClinicalCase   @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  appointment    Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
   prescriptions  Prescription[]
+
   @@unique([caseId, version])
   @@index([organizationId, petId])
 }
@@ -392,37 +463,49 @@ model Prescription {
   state          String
   prescriberId   String
   encounter      Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, encounterId])
 }
 
 model Consent {
-  id              String   @id @default(uuid())
+  id              String             @id @default(uuid())
   organizationId  String
   ownerId         String
   petId           String?
+  documentId      String?            @unique
+  appointmentId   String?
+  caseId          String?
   documentVersion String
   purpose         String
   state           String
+  signerName      String?
+  source          String             @default("WEB")
+  proofMetadata   Json?
   signedAt        DateTime
   revokedAt       DateTime?
-  owner           Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  createdAt       DateTime           @default(now())
+  owner           Owner              @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  document        GeneratedDocument? @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, ownerId])
+  @@index([organizationId, petId, purpose])
 }
 
 model CarePlan {
-  id             String   @id @default(uuid())
+  id             String         @id @default(uuid())
   organizationId String
   ownerId        String
   petId          String
   title          String
   state          String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime       @default(now())
   tasks          CarePlanTask[]
+
   @@index([organizationId, petId])
 }
 
 model CarePlanTask {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   carePlanId     String
   organizationId String
   title          String
@@ -430,7 +513,8 @@ model CarePlanTask {
   dueAt          DateTime?
   state          String
   completedAt    DateTime?
-  carePlan       CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Restrict)
+  carePlan       CarePlan  @relation(fields: [carePlanId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, dueAt, state])
 }
 
@@ -444,6 +528,7 @@ model GroomingProfile {
   preferredStyle String?
   updatedAt      DateTime @updatedAt
   createdAt      DateTime @default(now())
+
   @@unique([organizationId, petId])
   @@index([organizationId, petId])
 }
@@ -457,23 +542,25 @@ model GroomingRecipe {
   notes          String?
   isPreferred    Boolean  @default(false)
   createdAt      DateTime @default(now())
+
   @@index([organizationId, petId, isPreferred])
 }
 
 model GroomingVisit {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
-  appointmentId  String   @unique
+  appointmentId  String    @unique
   petId          String
   recipeId       String?
   state          String
   report         String?
-  beforeFileIds  Json     @default("[]")
-  afterFileIds   Json     @default("[]")
+  beforeFileIds  Json      @default("[]")
+  afterFileIds   Json      @default("[]")
   startedBy      String
   completedBy    String?
   completedAt    DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
+
   @@index([organizationId, petId, state])
 }
 
@@ -487,22 +574,24 @@ model PassportShare {
   state          String
   expiresAt      DateTime
   createdAt      DateTime @default(now())
+
   @@index([organizationId, petId, state])
 }
 
 model PrivacyRequest {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   ownerId        String
   type           String
   state          String
-  requestedAt    DateTime @default(now())
+  requestedAt    DateTime  @default(now())
   completedAt    DateTime?
+
   @@index([organizationId, ownerId, state])
 }
 
 model KnowledgeArticle {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   title          String
   slug           String
@@ -510,19 +599,21 @@ model KnowledgeArticle {
   state          String
   reviewedBy     String?
   publishedAt    DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
+
   @@unique([organizationId, slug])
 }
 
 model ServicePackage {
-  id             String   @id @default(uuid())
+  id             String           @id @default(uuid())
   organizationId String
   name           String
   credits        Int
   state          String
   serviceIds     Json
-  createdAt      DateTime @default(now())
+  createdAt      DateTime         @default(now())
   balances       PackageBalance[]
+
   @@index([organizationId, state])
 }
 
@@ -536,6 +627,7 @@ model PackageBalance {
   purchasedAt      DateTime       @default(now())
   expiresAt        DateTime?
   servicePackage   ServicePackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, ownerId])
 }
 
@@ -546,11 +638,12 @@ model LoyaltyLedgerEntry {
   pointsDelta    Int
   reason         String
   createdAt      DateTime @default(now())
+
   @@index([organizationId, ownerId, createdAt])
 }
 
 model OperationalTask {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   title          String
   priority       String
@@ -558,8 +651,9 @@ model OperationalTask {
   assigneeId     String?
   relatedType    String?
   relatedId      String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
   completedAt    DateTime?
+
   @@index([organizationId, state, priority])
 }
 
@@ -572,53 +666,56 @@ model Incident {
   description    String
   state          String
   createdAt      DateTime @default(now())
+
   @@index([organizationId, state, severity])
 }
 
 model Hospitalization {
-  id             String   @id @default(uuid())
-  organizationId String
-  ownerId        String
-  petId          String
-  appointmentId  String?  @unique
-  bedId          String?
+  id                     String                @id @default(uuid())
+  organizationId         String
+  ownerId                String
+  petId                  String
+  appointmentId          String?               @unique
+  bedId                  String?
   responsibleClinicianId String?
-  acuity         String   @default("STABLE")
-  currentPlan    String?
-  ownerUpdateState String @default("DUE")
-  alerts         Json     @default("[]")
-  state          String
-  admittedAt     DateTime @default(now())
-  dischargedAt   DateTime?
-  dischargedBy   String?
-  dischargeSummary String?
-  updatedAt      DateTime @updatedAt
-  tasks          TreatmentTask[]
-  observations   HospitalObservation[]
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  owner          Owner    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet            Pet      @relation(fields: [petId], references: [id], onDelete: Restrict)
-  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
-  bed            HospitalBed? @relation(fields: [bedId], references: [id], onDelete: Restrict)
+  acuity                 String                @default("STABLE")
+  currentPlan            String?
+  ownerUpdateState       String                @default("DUE")
+  alerts                 Json                  @default("[]")
+  state                  String
+  admittedAt             DateTime              @default(now())
+  dischargedAt           DateTime?
+  dischargedBy           String?
+  dischargeSummary       String?
+  updatedAt              DateTime              @updatedAt
+  tasks                  TreatmentTask[]
+  observations           HospitalObservation[]
+  organization           Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner                  Owner                 @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet                    Pet                   @relation(fields: [petId], references: [id], onDelete: Restrict)
+  appointment            Appointment?          @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  bed                    HospitalBed?          @relation(fields: [bedId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, petId, state])
   @@index([organizationId, bedId, state])
 }
 
 model HospitalBed {
-  id             String   @id @default(uuid())
-  organizationId String
-  locationId     String
-  label          String
-  zone           String
-  state          String   @default("AVAILABLE")
-  cleaningState  String   @default("READY")
-  isolation      Boolean  @default(false)
-  notes          String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  location       Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  id               String            @id @default(uuid())
+  organizationId   String
+  locationId       String
+  label            String
+  zone             String
+  state            String            @default("AVAILABLE")
+  cleaningState    String            @default("READY")
+  isolation        Boolean           @default(false)
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  location         Location          @relation(fields: [locationId], references: [id], onDelete: Restrict)
   hospitalizations Hospitalization[]
+
   @@unique([organizationId, locationId, label])
   @@index([organizationId, state, cleaningState])
 }
@@ -637,8 +734,9 @@ model TreatmentTask {
   administeredAt    DateTime?
   missedReason      String?
   notes             String?
-  vitals             Json?
+  vitals            Json?
   hospitalization   Hospitalization @relation(fields: [hospitalizationId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, scheduledAt, state])
 }
 
@@ -647,11 +745,12 @@ model HospitalObservation {
   hospitalizationId String
   organizationId    String
   acuity            String
-  vitals             Json
+  vitals            Json
   note              String?
   recordedBy        String
   recordedAt        DateTime        @default(now())
   hospitalization   Hospitalization @relation(fields: [hospitalizationId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, hospitalizationId, recordedAt])
 }
 
@@ -663,33 +762,35 @@ model HospitalHandoff {
   state          String   @default("APPROVED")
   createdBy      String
   createdAt      DateTime @default(now())
+
   @@index([organizationId, createdAt])
 }
 
 model SurgicalCase {
-  id               String            @id @default(uuid())
-  organizationId   String
-  ownerId          String
-  petId            String
-  procedure        String
-  indication       String
-  surgeonId        String
-  teamIds          Json
-  room             String
-  scheduledAt      DateTime
-  state            String
-  consentRecorded  Boolean           @default(false)
-  fastingConfirmed Boolean           @default(false)
-  checklist        Json
-  operativeNote    String?
-  complicationNote String?
-  recoveryNote     String?
-  dischargedAt     DateTime?
-  createdAt        DateTime          @default(now())
-  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  owner            Owner             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet              Pet               @relation(fields: [petId], references: [id], onDelete: Restrict)
+  id                String             @id @default(uuid())
+  organizationId    String
+  ownerId           String
+  petId             String
+  procedure         String
+  indication        String
+  surgeonId         String
+  teamIds           Json
+  room              String
+  scheduledAt       DateTime
+  state             String
+  consentRecorded   Boolean            @default(false)
+  fastingConfirmed  Boolean            @default(false)
+  checklist         Json
+  operativeNote     String?
+  complicationNote  String?
+  recoveryNote      String?
+  dischargedAt      DateTime?
+  createdAt         DateTime           @default(now())
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner             Owner              @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet               Pet                @relation(fields: [petId], references: [id], onDelete: Restrict)
   anesthesiaRecords AnesthesiaRecord[]
+
   @@index([organizationId, state, scheduledAt])
   @@index([organizationId, petId, scheduledAt])
 }
@@ -711,26 +812,28 @@ model AnesthesiaRecord {
   closedAt           DateTime?
   organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   surgicalCase       SurgicalCase @relation(fields: [surgicalCaseId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, surgicalCaseId])
   @@index([organizationId, petId, state])
 }
 
 model DentalChart {
-  id            String       @id @default(uuid())
+  id             String       @id @default(uuid())
   organizationId String
-  ownerId       String
-  petId         String
-  version       Int
-  state         String
-  findings      Json
-  procedures    Json
-  clinicianId   String
-  createdAt     DateTime     @default(now())
-  finalizedAt   DateTime?
-  amendmentOfId String?
-  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  owner         Owner        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet           Pet          @relation(fields: [petId], references: [id], onDelete: Restrict)
+  ownerId        String
+  petId          String
+  version        Int
+  state          String
+  findings       Json
+  procedures     Json
+  clinicianId    String
+  createdAt      DateTime     @default(now())
+  finalizedAt    DateTime?
+  amendmentOfId  String?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner          Owner        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet          @relation(fields: [petId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, petId, version])
   @@index([organizationId, petId, state])
 }
@@ -748,41 +851,44 @@ model Equipment {
   createdAt         DateTime     @default(now())
   organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   location          Location     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, serialNumber])
   @@index([organizationId, locationId, state])
 }
 
 model PhysicalIdentity {
-  id           String       @id @default(uuid())
+  id             String       @id @default(uuid())
   organizationId String
-  targetType   String
-  targetId     String
-  opaqueToken  String       @unique
-  state        String
-  createdAt    DateTime     @default(now())
-  revokedAt    DateTime?
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  targetType     String
+  targetId       String
+  opaqueToken    String       @unique
+  state          String
+  createdAt      DateTime     @default(now())
+  revokedAt      DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, targetType, targetId])
   @@index([organizationId, targetType, state])
 }
 
 model LabOrder {
-  id             String    @id @default(uuid())
+  id             String       @id @default(uuid())
   organizationId String
   petId          String
   testName       String
   state          String
-  orderedAt      DateTime  @default(now())
+  orderedAt      DateTime     @default(now())
   resultSummary  String?
   createdBy      String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  pet            Pet       @relation(fields: [petId], references: [id], onDelete: Restrict)
+  pet            Pet          @relation(fields: [petId], references: [id], onDelete: Restrict)
   specimens      Specimen[]
+
   @@index([organizationId, petId, orderedAt])
 }
 
 model Specimen {
-  id                String    @id @default(uuid())
+  id                String       @id @default(uuid())
   organizationId    String
   orderId           String
   petId             String
@@ -796,10 +902,11 @@ model Specimen {
   receivedAt        DateTime?
   rejectedReason    String?
   resultLinkedAt    DateTime?
-  identityId        String    @unique
+  identityId        String       @unique
   organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  order             LabOrder  @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  pet               Pet       @relation(fields: [petId], references: [id], onDelete: Restrict)
+  order             LabOrder     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  pet               Pet          @relation(fields: [petId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, orderId, state])
 }
 
@@ -812,6 +919,7 @@ model Supplier {
   createdAt      DateTime        @default(now())
   organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   purchaseOrders PurchaseOrder[]
+
   @@index([organizationId, state])
 }
 
@@ -828,12 +936,13 @@ model PurchaseOrder {
   receivedAt     DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   supplier       Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, locationId, state])
   @@index([supplierId, state])
 }
 
 model InventoryItem {
-  id                     String   @id @default(uuid())
+  id                     String          @id @default(uuid())
   organizationId         String
   sku                    String
   name                   String
@@ -842,110 +951,148 @@ model InventoryItem {
   barcode                String?
   purchasePriceMinor     Int?
   sellPriceMinor         Int?
-  lowStockThresholdMilli Int      @default(0)
-  storageRequirements    Json     @default("{}")
-  active                 Boolean  @default(true)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
-  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  lowStockThresholdMilli Int             @default(0)
+  storageRequirements    Json            @default("{}")
+  active                 Boolean         @default(true)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  organization           Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   lots                   StockLot[]
   movements              StockMovement[]
+
   @@unique([organizationId, sku])
   @@unique([organizationId, barcode])
   @@index([organizationId, itemType, active])
 }
 
 model StockLot {
-  id             String   @id @default(uuid())
+  id             String          @id @default(uuid())
   organizationId String
   itemId         String
   locationId     String
   lotCode        String
   expiryAt       DateTime?
   quantityMilli  Int
-  state          String   @default("ACTIVE")
-  storageState   String   @default("AVAILABLE")
-  receivedAt     DateTime @default(now())
+  state          String          @default("ACTIVE")
+  storageState   String          @default("AVAILABLE")
+  receivedAt     DateTime        @default(now())
   createdBy      String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  location       Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  item           InventoryItem   @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location       Location        @relation(fields: [locationId], references: [id], onDelete: Restrict)
   movements      StockMovement[]
+
   @@unique([organizationId, itemId, locationId, lotCode])
   @@index([organizationId, itemId, locationId, expiryAt])
   @@index([organizationId, state, storageState])
 }
 
 model StockMovement {
-  id             String   @id @default(uuid())
-  organizationId String
-  itemId         String
-  lotId          String
-  locationId     String
-  direction      String
-  quantityMilli  Int
+  id                String        @id @default(uuid())
+  organizationId    String
+  itemId            String
+  lotId             String
+  locationId        String
+  direction         String
+  quantityMilli     Int
   balanceAfterMilli Int
-  reason         String
-  referenceType  String?
-  referenceId    String?
-  petId          String?
-  performedBy    String
-  createdAt      DateTime @default(now())
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  lot            StockLot @relation(fields: [lotId], references: [id], onDelete: Restrict)
-  location       Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  reason            String
+  referenceType     String?
+  referenceId       String?
+  petId             String?
+  performedBy       String
+  createdAt         DateTime      @default(now())
+  organization      Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  item              InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  lot               StockLot      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  location          Location      @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, itemId, locationId, createdAt])
   @@index([organizationId, referenceType, referenceId])
   @@index([organizationId, petId, createdAt])
 }
 
 model PrintTemplate {
-  id             String       @id @default(uuid())
+  id             String              @id @default(uuid())
   organizationId String
   kind           String
+  title          String?
   version        Int
   body           String
+  contentHash    String?
   state          String
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime            @default(now())
   publishedAt    DateTime?
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   jobs           PrintJob[]
+  documents      GeneratedDocument[]
+
   @@unique([organizationId, kind, version])
   @@index([organizationId, kind, state])
 }
 
+model GeneratedDocument {
+  id              String        @id @default(uuid())
+  organizationId  String
+  templateId      String
+  ownerId         String
+  petId           String?
+  appointmentId   String?
+  caseId          String?
+  invoiceId       String?
+  kind            String
+  title           String
+  documentVersion String
+  renderedBody    String
+  contentHash     String
+  idempotencyKey  String?       @unique
+  state           String        @default("AWAITING_SIGNATURE")
+  createdBy       String
+  createdAt       DateTime      @default(now())
+  signedAt        DateTime?
+  revokedAt       DateTime?
+  template        PrintTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  invoice         Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  consent         Consent?
+
+  @@index([organizationId, ownerId, createdAt])
+  @@index([organizationId, petId, kind])
+  @@index([organizationId, state, createdAt])
+}
+
 model PrintJob {
-  id             String       @id @default(uuid())
+  id             String        @id @default(uuid())
   organizationId String
   templateId     String
   kind           String
   payload        Json
   state          String
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime      @default(now())
   externalJobId  String?
   failureReason  String?
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   template       PrintTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, state, createdAt])
 }
 
 model ChecklistTemplate {
-  id             String       @id @default(uuid())
+  id             String         @id @default(uuid())
   organizationId String
   purpose        String
   version        Int
   state          String
   steps          Json
-  createdAt      DateTime     @default(now())
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   runs           ChecklistRun[]
+
   @@unique([organizationId, purpose, version])
   @@index([organizationId, purpose, state])
 }
 
 model ChecklistRun {
-  id             String       @id @default(uuid())
+  id             String            @id @default(uuid())
   organizationId String
   templateId     String
   targetType     String
@@ -954,9 +1101,10 @@ model ChecklistRun {
   steps          Json
   signedOffBy    String?
   signedOffAt    DateTime?
-  createdAt      DateTime     @default(now())
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdAt      DateTime          @default(now())
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   template       ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, targetType, targetId])
   @@index([organizationId, state, createdAt])
 }
@@ -970,6 +1118,7 @@ model StaffProfile {
   locationIds     Json
   createdAt       DateTime     @default(now())
   organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, userId])
   @@index([organizationId, employmentState])
 }
@@ -985,6 +1134,7 @@ model Credential {
   state                   String
   createdAt               DateTime     @default(now())
   organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, userId, competency, state])
   @@index([organizationId, expiresAt])
 }
@@ -1003,6 +1153,7 @@ model Precheck {
   reviewedAt       DateTime?
   createdAt        DateTime     @default(now())
   organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, appointmentId])
   @@index([organizationId, petId, state])
 }
@@ -1018,6 +1169,7 @@ model AuditEvent {
   metadata       Json
   occurredAt     DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, aggregateType, aggregateId])
 }
 
@@ -1032,6 +1184,7 @@ model OutboxEvent {
   occurredAt     DateTime     @default(now())
   publishedAt    DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, publishedAt])
 }
