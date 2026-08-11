@@ -105,7 +105,7 @@ async function serveStaffHome(response: ServerResponse) {
   try {
     const html = await readFile(join(staffRoot, 'index.html'), 'utf8');
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    response.end(html.replace('</body>', '<script src="/staff/app.js"></script></body>'));
+    response.end(html);
   } catch { json(response, 404, { error: 'NOT_FOUND' }); }
 }
 async function serveClientHome(response: ServerResponse) {
