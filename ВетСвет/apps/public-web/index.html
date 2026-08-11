@@ -76,7 +76,11 @@
       .app-mini { z-index:1; left:0; top:10px; width:180px; padding:.95rem; transform: translateZ(12px) rotateY(13deg) rotateX(-5deg); opacity:.75; }
       .app-mini b { display:block; margin:.5rem 0 0; font-size:.88rem; letter-spacing:-.03em; }
       .app-pet-dot { position:absolute; z-index:4; left:42%; top:40%; display:grid; place-items:center; width:63px; aspect-ratio:1; border-radius:50%; color:var(--ink); background:var(--mint); box-shadow:0 0 0 9px rgba(197,247,218,.1), 0 15px 35px rgba(0,0,0,.3); transform:translateZ(95px); font-weight:900; font-size:1.45rem; }
-      .staff-portal { position:relative; display:grid; grid-template-columns:.9fr 1.1fr; gap:clamp(2rem,6vw,7rem); align-items:center; min-height:500px; margin:-2.5rem auto 7rem; padding:clamp(2rem,4.5vw,4.5rem); overflow:hidden; isolation:isolate; border:1px solid rgba(197,247,218,.18); border-radius:2rem; color:white; background:radial-gradient(circle at 88% 10%, #1b8488, transparent 34%), linear-gradient(135deg, #082d2d, #0b2929 55%, #092124); box-shadow:0 32px 90px rgba(3,30,31,.22); }
+      .continuity { position:relative; display:grid; grid-template-columns:minmax(0,1.05fr) minmax(330px,.95fr); gap:clamp(2rem,6vw,7rem); align-items:center; margin:clamp(2.4rem,5vw,5.5rem) auto clamp(4.5rem,8vw,8rem); padding:clamp(2rem,5vw,5.2rem); overflow:hidden; isolation:isolate; border:1px solid rgba(7,85,90,.15); border-radius:2rem; background:linear-gradient(125deg,#f9f8f2 0%,#f1efe7 56%,#d9eee4 100%); box-shadow:0 28px 70px rgba(12,55,55,.1); }
+      .continuity::before { content:""; position:absolute; z-index:-1; width:clamp(280px,38vw,540px); aspect-ratio:1; right:-9%; top:-58%; border:1px solid rgba(7,85,90,.16); border-radius:50%; box-shadow:0 0 0 54px rgba(7,85,90,.035),0 0 0 108px rgba(7,85,90,.022); }
+      .continuity-copy { position:relative; z-index:1; max-width:650px; }.continuity-copy h2 { max-width:8.9ch; margin:.65rem 0 1.3rem; color:var(--ink); font-size:clamp(3rem,5.7vw,6.4rem); line-height:.88; letter-spacing:-.085em; }.continuity-copy > p:last-of-type { max-width:475px; margin:0; color:#51615c; font-size:clamp(1rem,1.35vw,1.2rem); line-height:1.5; }.continuity-copy .button { margin-top:1.35rem; }
+      .continuity-steps { position:relative; z-index:1; display:grid; gap:.72rem; margin:0; padding:0; list-style:none; }.continuity-step { display:grid; grid-template-columns:2.9rem 1fr auto; gap:.85rem; align-items:center; min-height:92px; padding:1rem 1.1rem; border:1px solid rgba(7,85,90,.13); border-radius:1.1rem; background:rgba(255,255,255,.56); box-shadow:0 14px 30px rgba(18,57,53,.045); transition:transform .4s var(--ease),background .4s var(--ease),box-shadow .4s var(--ease); }.continuity-step:hover { transform:translateX(-7px); background:rgba(255,255,255,.8); box-shadow:0 20px 40px rgba(18,57,53,.11); }.continuity-step > span { color:#518276; font-size:.72rem; font-weight:900; letter-spacing:.1em; }.continuity-step b { display:block; color:#183a38; font-size:clamp(1.05rem,1.55vw,1.35rem); letter-spacing:-.045em; }.continuity-step p { margin:.25rem 0 0; color:#66716a; font-size:.83rem; line-height:1.35; }.continuity-step i { width:.58rem; aspect-ratio:1; border-radius:50%; background:var(--mint); box-shadow:0 0 0 6px rgba(80,133,117,.12); }
+      .staff-portal { position:relative; display:grid; grid-template-columns:.9fr 1.1fr; gap:clamp(2rem,6vw,7rem); align-items:center; min-height:500px; margin:0 auto 7rem; padding:clamp(2rem,4.5vw,4.5rem); overflow:hidden; isolation:isolate; border:1px solid rgba(197,247,218,.18); border-radius:2rem; color:white; background:radial-gradient(circle at 88% 10%, #1b8488, transparent 34%), linear-gradient(135deg, #082d2d, #0b2929 55%, #092124); box-shadow:0 32px 90px rgba(3,30,31,.22); }
       .staff-portal::before { content:""; position:absolute; width:720px; aspect-ratio:1; right:-260px; bottom:-420px; border:1px solid rgba(197,247,218,.3); border-radius:50%; box-shadow:0 0 0 70px rgba(197,247,218,.035),0 0 0 140px rgba(197,247,218,.025); }
       .staff-portal::after { content:"02 · ОДНА КОМАНДА"; position:absolute; z-index:-1; right:clamp(1.4rem,4vw,4rem); top:1.5rem; color:rgba(197,247,218,.52); font-size:.62rem; font-weight:800; letter-spacing:.16em; }
       .staff-portal-copy{position:relative;z-index:1}.staff-portal-copy h2{max-width:530px;margin:.45rem 0 1.2rem;font-size:clamp(2.7rem,5.6vw,6.2rem);line-height:.86;letter-spacing:-.085em}.staff-portal-copy p{max-width:420px;color:rgba(255,255,255,.7);line-height:1.45}.staff-portal-copy .button{margin-top:1.15rem;background:var(--mint);color:var(--ink)}
@@ -178,7 +182,8 @@
         .app-mini,.app-pet-dot { display:none; }
         .app-summary { width:218px; padding:.9rem; transform:translateZ(35px) rotateY(-6deg) rotateX(2deg); }
         .app-summary b { margin:.38rem 0 .12rem; font-size:1.02rem; }.app-summary p { font-size:.68rem; }.app-bars { height:24px; margin-top:.65rem; }
-        .staff-portal{grid-template-columns:1fr;margin:-1.5rem auto 6rem}.staff-terminal{justify-self:start}
+        .continuity { grid-template-columns:1fr; gap:1.6rem; margin:2rem auto 5rem; }.continuity-copy h2 { max-width:11ch; }.continuity-steps { max-width:620px; }
+        .staff-portal{grid-template-columns:1fr;margin:0 auto 6rem}.staff-terminal{justify-self:start}
         h1 { font-size: clamp(4rem, 17vw, 7rem); max-width: 620px; }
         .hero-bottom { align-items: start; flex-direction: column; }
         .scroll-cue { display: none; }
@@ -234,7 +239,8 @@
         .principle p { grid-column: 2; }
         .emergency-card { grid-template-columns: 1fr; padding: 2rem 1.25rem; }
         .emergency-card .button { justify-self: start; }
-        .staff-portal{min-height:0;margin:-1rem auto 5rem;padding:2.8rem 1.1rem 1.4rem;border-radius:1.45rem}.staff-portal::after{top:1.1rem;right:1.1rem;font-size:.52rem}.staff-portal-copy h2{font-size:clamp(3rem,15vw,4.5rem)}.staff-terminal{width:100%;transform:none}.staff-portal:hover .staff-terminal{transform:translateY(-3px)}
+        .continuity { margin:1.15rem auto 4.5rem; padding:1.35rem; border-radius:1.4rem; }.continuity-copy h2 { margin:.6rem 0 1rem; font-size:clamp(2.8rem,13.5vw,4.5rem); }.continuity-step { grid-template-columns:2.25rem 1fr; min-height:0; padding:.95rem; }.continuity-step i { display:none; }.continuity-step p { font-size:.79rem; }
+        .staff-portal{min-height:0;margin:0 auto 5rem;padding:2.8rem 1.1rem 1.4rem;border-radius:1.45rem}.staff-portal::after{top:1.1rem;right:1.1rem;font-size:.52rem}.staff-portal-copy h2{font-size:clamp(3rem,15vw,4.5rem)}.staff-terminal{width:100%;transform:none}.staff-portal:hover .staff-terminal{transform:translateY(-3px)}
         .footer-inner { align-items: start; flex-direction: column; }
       }
       @media (prefers-reduced-motion: reduce) {
@@ -268,6 +274,19 @@
           </div>
         </div>
         <div class="scroll-cue" aria-hidden="true">Листайте</div>
+      </section>
+      <section class="continuity shell" aria-labelledby="continuity-title">
+        <div class="continuity-copy">
+          <p class="eyebrow">01 · не оставайтесь с вопросом одни</p>
+          <h2 class="reveal words" id="continuity-title">Забота не обрывается после записи.</h2>
+          <p>Вы уже сделали главное — решили не оставаться с тревогой наедине. Дальше VetSvet помогает увидеть следующий шаг, сохранить важное и быть рядом тогда, когда это действительно нужно.</p>
+          <a class="button" href="#care">Выбрать, с чего начать <span aria-hidden="true">↘</span></a>
+        </div>
+        <ol class="continuity-steps" aria-label="Как VetSvet ведёт заботу">
+          <li class="continuity-step reveal"><span>01</span><div><b>Вы рассказываете, что происходит</b><p>Без сложных слов и без необходимости всё знать заранее.</p></div><i aria-hidden="true"></i></li>
+          <li class="continuity-step reveal"><span>02</span><div><b>Команда берёт следующий шаг</b><p>Подсказывает маршрут и не оставляет вас в тишине.</p></div><i aria-hidden="true"></i></li>
+          <li class="continuity-step reveal"><span>03</span><div><b>Важное остаётся с вами</b><p>История, рекомендации и связь собраны в одном месте.</p></div><i aria-hidden="true"></i></li>
+        </ol>
       </section>
       <section class="staff-portal shell" aria-labelledby="staff-title"><div class="staff-portal-copy"><p class="eyebrow">Для команды VetSvet</p><h2 id="staff-title">Внутри —<br>всё живёт<br>вместе.</h2><p>Пациенты, запись, рецепты груминга, клинический контекст, задачи и статус смены — в одном спокойном рабочем пространстве.</p><a class="button" href="/staff/">Открыть рабочее место <span aria-hidden="true">↗</span></a></div><div class="staff-terminal" aria-label="Превью рабочего пространства команды"><div class="terminal-top"><span><i></i><i></i><i></i></span><b>VetSvet / Today</b></div><div class="terminal-grid"><div class="terminal-block"><small>Следующий пациент</small><b>Мишка</b><p>Груминг · 10:00<br>есть прошлый recipe</p></div><div class="terminal-block"><small>В фокусе</small><b>03</b><p>задачи требуют<br>внимания команды</p></div><div class="terminal-block terminal-list"><div class="terminal-row"><span>Тиша · приём</span><span>подтверждено</span></div><div class="terminal-row"><span>Бакс · консультация</span><span>оплачено</span></div><div class="terminal-row"><span>Луна · груминг</span><span>через 35 мин</span></div></div></div></div></section>
       <section class="intro shell" aria-labelledby="intro-title">
