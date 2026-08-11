@@ -82,11 +82,16 @@
       .staff-portal-copy{position:relative;z-index:1}.staff-portal-copy h2{max-width:530px;margin:.45rem 0 1.2rem;font-size:clamp(2.7rem,5.6vw,6.2rem);line-height:.86;letter-spacing:-.085em}.staff-portal-copy p{max-width:420px;color:rgba(255,255,255,.7);line-height:1.45}.staff-portal-copy .button{margin-top:1.15rem;background:var(--mint);color:var(--ink)}
       .staff-terminal{position:relative;z-index:1;justify-self:end;width:min(100%,500px);padding:1rem;border:1px solid rgba(255,255,255,.19);border-radius:1.15rem;background:rgba(1,20,20,.47);box-shadow:0 35px 80px rgba(0,0,0,.32);backdrop-filter:blur(20px);transform:perspective(950px) rotateY(-10deg) rotateX(3deg);transition:transform .45s var(--ease)}.staff-portal:hover .staff-terminal{transform:perspective(950px) rotateY(-4deg) rotateX(1deg) translateY(-7px)}
       .terminal-top{display:flex;align-items:center;justify-content:space-between;padding:.25rem .2rem .8rem;color:rgba(255,255,255,.66);font-size:.68rem}.terminal-top span{display:flex;gap:5px}.terminal-top i{width:7px;height:7px;border-radius:50%;background:#d5f6db}.terminal-grid{display:grid;grid-template-columns:1fr .75fr;gap:.7rem}.terminal-block{padding:.85rem;border:1px solid rgba(255,255,255,.12);border-radius:.78rem;background:rgba(255,255,255,.065)}.terminal-block small{color:var(--mint);font-size:.62rem}.terminal-block b{display:block;margin:.35rem 0;font-size:1.45rem;letter-spacing:-.06em}.terminal-block p{margin:0;color:rgba(255,255,255,.61);font-size:.68rem;line-height:1.35}.terminal-list{grid-column:span 2;display:grid;gap:.1rem}.terminal-row{display:flex;justify-content:space-between;padding:.58rem 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:.7rem}.terminal-row:last-child{border:0}.terminal-row span:last-child{color:var(--mint)}
-      .intro { padding: clamp(5rem, 10vw, 10rem) 0 4.5rem; }
-      .intro-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(240px, .54fr); gap: 2rem; align-items: end; }
-      .display { margin: 0; font-size: clamp(2.65rem, 6.5vw, 7.25rem); line-height: .9; letter-spacing: -.08em; font-weight: 850; }
-      .intro aside { padding: 1.25rem 0; border-top: 1px solid var(--line); font-size: 1.08rem; line-height: 1.45; color: #565551; }
-      .word { display: inline-block; opacity: .08; transform: translateY(18px); filter: blur(4px); transition: opacity .55s var(--ease), transform .55s var(--ease), filter .55s var(--ease); }
+      .intro { padding: clamp(3.8rem, 6.8vw, 7.5rem) 0 clamp(4.5rem, 8vw, 7.8rem); }
+      .intro-grid { position:relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(290px, .58fr); gap: clamp(2rem,5vw,6rem); align-items: end; padding:clamp(1.4rem,3.6vw,3.5rem); overflow:hidden; border:1px solid var(--line); border-radius:var(--radius); background:linear-gradient(135deg,#f8f6f0,#ece9e1); box-shadow:0 25px 62px rgba(30,37,34,.065); }
+      .intro-grid:after { content:""; position:absolute; width:clamp(180px,23vw,360px); aspect-ratio:1; right:-10%; top:-43%; border:1px solid rgba(7,85,90,.18); border-radius:50%; box-shadow:0 0 0 42px rgba(7,85,90,.035),0 0 0 84px rgba(7,85,90,.022); pointer-events:none; }
+      .intro-copy { position:relative; z-index:1; }
+      .intro-kicker { display:flex; align-items:center; gap:.55rem; margin:0 0 1rem; color:#387067; font-size:.68rem; font-weight:850; letter-spacing:.15em; text-transform:uppercase; }
+      .intro-kicker:before { content:""; width:.48rem; height:.48rem; border-radius:50%; background:var(--teal); box-shadow:0 0 0 6px rgba(7,85,90,.09); }
+      .display { max-width:10.8ch; margin:0; font-size:clamp(3rem, 5.25vw, 6.25rem); line-height: .91; letter-spacing: -.075em; font-weight: 850; }
+      .intro aside { position:relative; z-index:1; padding:1.35rem 1.45rem; border:1px solid rgba(7,85,90,.14); border-radius:1rem; background:rgba(255,255,255,.48); font-size:clamp(1rem,1.25vw,1.15rem); line-height:1.48; color:#4f544e; box-shadow:0 16px 34px rgba(31,40,37,.05); }
+      .intro aside b { display:block; margin-bottom:.65rem; color:var(--teal); font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; }
+      .word { display: inline-block; margin-right:.18em; opacity: .08; transform: translateY(18px); filter: blur(4px); transition: opacity .55s var(--ease), transform .55s var(--ease), filter .55s var(--ease); }
       .words-in .word { opacity: 1; transform: none; filter: none; }
       .route-section { padding: 1rem 0 7rem; }
       .section-kicker { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: 1.2rem; font-size: .75rem; color: #696760; letter-spacing: .12em; text-transform: uppercase; }
@@ -209,9 +214,9 @@
         .hero-copy { max-width: 300px; font-size: 1rem; }
         .hero-actions { width: 100%; }
         .hero-actions .button { flex: 1; }
-        .intro { padding: 5.25rem 0 3.5rem; }
-        .intro-grid { grid-template-columns: 1fr; gap: 1.25rem; }
-        .display { font-size: clamp(2.8rem, 14vw, 4.7rem); }
+        .intro { padding: 3.8rem 0 4.5rem; }
+        .intro-grid { grid-template-columns: 1fr; gap: 1.25rem; padding:1.3rem; border-radius:1.25rem; }
+        .display { font-size: clamp(2.85rem, 13vw, 4.7rem); max-width:11ch; }
         .route-section { padding-bottom: 5rem; }
         .route-grid { grid-template-columns: 1fr; }
         .route-card { min-height: 245px; border-left: 0; border-top: 1px solid var(--line); transform:none !important; box-shadow:none !important; }
@@ -267,8 +272,8 @@
       <section class="staff-portal shell" aria-labelledby="staff-title"><div class="staff-portal-copy"><p class="eyebrow">Для команды VetSvet</p><h2 id="staff-title">Внутри —<br>всё живёт<br>вместе.</h2><p>Пациенты, запись, рецепты груминга, клинический контекст, задачи и статус смены — в одном спокойном рабочем пространстве.</p><a class="button" href="/staff/">Открыть рабочее место <span aria-hidden="true">↗</span></a></div><div class="staff-terminal" aria-label="Превью рабочего пространства команды"><div class="terminal-top"><span><i></i><i></i><i></i></span><b>VetSvet / Today</b></div><div class="terminal-grid"><div class="terminal-block"><small>Следующий пациент</small><b>Мишка</b><p>Груминг · 10:00<br>есть прошлый recipe</p></div><div class="terminal-block"><small>В фокусе</small><b>03</b><p>задачи требуют<br>внимания команды</p></div><div class="terminal-block terminal-list"><div class="terminal-row"><span>Тиша · приём</span><span>подтверждено</span></div><div class="terminal-row"><span>Бакс · консультация</span><span>оплачено</span></div><div class="terminal-row"><span>Луна · груминг</span><span>через 35 мин</span></div></div></div></div></section>
       <section class="intro shell" aria-labelledby="intro-title">
         <div class="intro-grid">
-          <h2 class="display reveal words" id="intro-title">Здесь помнят не только карточку. Здесь помнят <span>вашего.</span></h2>
-          <aside class="reveal">Не нужно каждый раз собирать историю заново. VetSvet соединяет заботу, понятные решения и память о жизни питомца — без тревоги и лишнего шума.</aside>
+          <div class="intro-copy"><p class="intro-kicker">Память заботы</p><h2 class="display reveal words" id="intro-title">Здесь помнят не только карточку. Здесь помнят вашего питомца.</h2></div>
+          <aside class="reveal"><b>Не начинать с нуля</b>Не нужно каждый раз собирать историю заново. VetSvet соединяет заботу, понятные решения и память о жизни питомца — без тревоги и лишнего шума.</aside>
         </div>
       </section>
       <section class="route-section shell" id="care" aria-labelledby="care-title">
@@ -327,7 +332,7 @@
       document.querySelectorAll('.reveal').forEach((item) => revealObserver.observe(item));
       document.querySelectorAll('.words').forEach((container) => {
         const words = container.textContent.trim().split(/\s+/); container.textContent = '';
-        words.forEach((word, index) => { const span = document.createElement('span'); span.className = 'word'; span.style.transitionDelay = `${Math.min(index * 38, 700)}ms`; span.textContent = `${word} `; container.append(span); });
+        words.forEach((word, index) => { const span = document.createElement('span'); span.className = 'word'; span.style.transitionDelay = `${Math.min(index * 38, 700)}ms`; span.textContent = word; container.append(span); });
         const wordObserver = new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add('words-in'); wordObserver.unobserve(entry.target); } }), { threshold: .45 }); wordObserver.observe(container);
       });
       if (!reduceMotion) {
