@@ -139,6 +139,8 @@ async function loadStaff() {
   if (me.account.mode !== 'STAFF') { location.assign('/client/'); return; }
   const dashboard = await staffApi('/api/v1/staff/dashboard');
   dashboard.account.telegramLinked = Boolean(me.account.telegramLinked);
+  document.documentElement.dataset.staffRole = dashboard.account.role;
+  window.dispatchEvent(new CustomEvent('vetsvet:data-ready', { detail: { role: dashboard.account.role } }));
   const hospital = ['ADMIN', 'VETERINARIAN', 'ASSISTANT'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/hospital/dashboard') : { beds: [], admissions: [] };
   const inventory = ['ADMIN', 'MANAGER', 'VETERINARIAN', 'ASSISTANT'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/inventory/dashboard') : { items: [], locations: [], movements: [] };
   const finance = ['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/finance/dashboard') : { invoices: [], templates: [] };
