@@ -67,6 +67,29 @@ async function session(request: IncomingMessage) {
   if (!token) return undefined;
   return db.authSession.findFirst({ where: { tokenHash: digest(token), state: 'ACTIVE', expiresAt: { gt: new Date() } }, include: { user: true } });
 }
+async function currentOwner(request: IncomingMessage) {
+  const current = await session(request);
+  if (!current || current.mode !== 'CLIENT') return undefined;
+  const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: current.userId }, { telegramUserId: current.user.telegramUserId ?? undefined }] } });
+  return owner ? { current, owner } : undefined;
+}
+async function currentStaff(request: IncomingMessage) {
+  const current = await session(request);
+  if (!current || current.mode !== 'STAFF') return undefined;
+  const membership = await db.staffMembership.findUnique({ where: { organizationId_userId: { organizationId: config.organizationId, userId: current.userId } } });
+  return membership?.state === 'ACTIVE' ? { current, membership } : undefined;
+}
+function idempotencyKey(request: IncomingMessage) {
+  const key = String(request.headers['idempotency-key'] ?? '').trim();
+  return /^[A-Za-z0-9_.:-]{8,160}$/.test(key) ? key : undefined;
+}
+async function auditCommand(input: { actorId: string; action: string; aggregateType: string; aggregateId: string; idempotencyKey: string; payload?: Record<string, unknown> }) {
+  const occurredAt = new Date();
+  await db.$transaction([
+    db.auditEvent.create({ data: { organizationId: config.organizationId, actorId: input.actorId, action: input.action, aggregateType: input.aggregateType, aggregateId: input.aggregateId, correlationId: input.idempotencyKey, metadata: input.payload ?? {} } }),
+    db.outboxEvent.create({ data: { organizationId: config.organizationId, eventName: input.action, aggregateType: input.aggregateType, aggregateId: input.aggregateId, idempotencyKey: input.idempotencyKey, payload: input.payload ?? {}, occurredAt } })
+  ]);
+}
 async function serve(response: ServerResponse, base: string, path: string) {
   const target = normalize(join(base, path));
   if (!target.startsWith(base)) { json(response, 403, { error: 'FORBIDDEN' }); return; }
@@ -74,6 +97,13 @@ async function serve(response: ServerResponse, base: string, path: string) {
     const data = await readFile(target);
     response.writeHead(200, { 'content-type': mime[extname(target)] ?? 'application/octet-stream', 'cache-control': extname(target) === '.html' ? 'no-store' : 'public, max-age=300' });
     response.end(data);
+  } catch { json(response, 404, { error: 'NOT_FOUND' }); }
+}
+async function serveStaffHome(response: ServerResponse) {
+  try {
+    const html = await readFile(join(staffRoot, 'index.html'), 'utf8');
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    response.end(html.replace('</body>', '<script src="/staff/app.js"></script></body>'));
   } catch { json(response, 404, { error: 'NOT_FOUND' }); }
 }
 async function telegram(method: string, payload: Record<string, unknown>) {
@@ -85,6 +115,22 @@ async function say(chatId: string, text: string, keyboard?: unknown) {
 }
 async function ensureOrganization() {
   await db.organization.upsert({ where: { id: config.organizationId }, update: {}, create: { id: config.organizationId, legalName: 'VetSvet', displayName: 'ВетСвет' } });
+}
+async function ensureBookingFoundation() {
+  const location = await db.location.findFirst({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } })
+    ?? await db.location.create({ data: { organizationId: config.organizationId, name: 'Основная клиника', timezone: 'Europe/Moscow' } });
+  const defaults = [
+    { internalName: 'VET_INITIAL', publicName: 'Первичный приём ветеринара', kind: 'VETERINARY', variant: 'Осмотр и план заботы', durationMinutes: 40 },
+    { internalName: 'GROOMING_REQUEST', publicName: 'Груминг', kind: 'GROOMING', variant: 'Подобрать уход для питомца', durationMinutes: 90 },
+    { internalName: 'REMOTE_CONSULTATION', publicName: 'Консультация', kind: 'CONSULTATION', variant: 'Онлайн-консультация специалиста', durationMinutes: 30 }
+  ];
+  for (const item of defaults) {
+    const service = await db.service.findFirst({ where: { organizationId: config.organizationId, internalName: item.internalName } })
+      ?? await db.service.create({ data: { organizationId: config.organizationId, publicName: item.publicName, internalName: item.internalName, kind: item.kind, onlineBookable: true } });
+    const variant = await db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, serviceId: service.id, name: item.variant } });
+    if (!variant) await db.serviceVariant.create({ data: { organizationId: config.organizationId, serviceId: service.id, name: item.variant, durationMinutes: item.durationMinutes, priceMinor: 0, depositMinor: 0, allowedSpecies: ['DOG', 'CAT', 'OTHER'] } });
+  }
+  return location;
 }
 async function ownerFor(telegramUserId: string, fullName: string) {
   const user = await db.userIdentity.upsert({ where: { telegramUserId }, update: {}, create: { telegramUserId } });
@@ -345,13 +391,117 @@ const server = createServer(async (request, response) => {
     }
     const dashboard = url.pathname.match(/^\/api\/v1\/client\/owners\/([^/]+)\/dashboard$/);
     if (request.method === 'GET' && dashboard) {
-      const current = await session(request);
-      if (!current || current.mode !== 'CLIENT') { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
-      const owner = await db.owner.findFirst({ where: { organizationId: config.organizationId, OR: [{ userId: current.userId }, { telegramUserId: current.user.telegramUserId ?? undefined }] } });
+      const account = await currentOwner(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const { owner } = account;
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
-      const pets = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
-      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName }, pets: pets.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, appointments: [], careTasks: [], timeline: [] })) });
+      const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
+      const petIds = relations.map((item) => item.pet.id);
+      const [appointments, plans] = await Promise.all([
+        db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { startsAt: 'asc' }, take: 20 }),
+        db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } })
+      ]);
+      const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
+      const variantById = new Map(variants.map((item) => [item.id, item]));
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, medicalAlerts: item.pet.medicalAlerts, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '' })), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), timeline: [] })), petCount: petIds.length });
       return;
+    }
+    if (request.method === 'PATCH' && url.pathname === '/api/v1/client/profile') {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { fullName?: string; phone?: string; email?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const fullName = String(input.fullName ?? '').trim();
+      if (fullName.length < 2 || fullName.length > 120) { json(response, 400, { error: 'INVALID_NAME' }); return; }
+      const owner = await db.owner.update({ where: { id: account.owner.id }, data: { fullName, phone: String(input.phone ?? '').trim() || null, email: String(input.email ?? '').trim() || null } });
+      await auditCommand({ actorId: account.current.userId, action: 'owner.profile_updated', aggregateType: 'Owner', aggregateId: owner.id, idempotencyKey: key });
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email } }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/client/pets') {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { name?: string; species?: string; medicalAlerts?: string[] } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const name = String(input.name ?? '').trim(); const species = String(input.species ?? '').toUpperCase();
+      if (name.length < 1 || name.length > 80 || !['DOG', 'CAT', 'OTHER'].includes(species)) { json(response, 400, { error: 'INVALID_PET' }); return; }
+      const alerts = Array.isArray(input.medicalAlerts) ? input.medicalAlerts.map((item) => String(item).trim()).filter(Boolean).slice(0, 12) : [];
+      const pet = await db.$transaction(async (tx) => {
+        const created = await tx.pet.create({ data: { organizationId: config.organizationId, name, species, medicalAlerts: alerts } });
+        await tx.ownerPetRelation.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: created.id, relation: 'OWNER', primary: true } });
+        return created;
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'pet.created', aggregateType: 'Pet', aggregateId: pet.id, idempotencyKey: key, payload: { species } });
+      json(response, 201, { pet: { id: pet.id, name: pet.name, species: pet.species, medicalAlerts: pet.medicalAlerts } }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/client/booking/catalog') {
+      const account = await currentOwner(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const [locations, variants] = await Promise.all([
+        db.location.findMany({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } }),
+        db.serviceVariant.findMany({ where: { organizationId: config.organizationId, service: { onlineBookable: true } }, include: { service: true }, orderBy: { service: { publicName: 'asc' } } })
+      ]);
+      json(response, 200, { locations: locations.map((location) => ({ id: location.id, name: location.name })), variants: variants.map((variant) => ({ id: variant.id, service: variant.service.publicName, name: variant.name, kind: variant.service.kind, durationMinutes: variant.durationMinutes, priceMinor: variant.priceMinor, currency: variant.currency, allowedSpecies: variant.allowedSpecies })) }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/client/appointments') {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { petId?: string; variantId?: string; locationId?: string; startsAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const [relation, variant, location] = await Promise.all([
+        db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: String(input.petId ?? '') }, include: { pet: true } }),
+        db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, id: String(input.variantId ?? ''), service: { onlineBookable: true } }, include: { service: true } }),
+        db.location.findFirst({ where: { organizationId: config.organizationId, id: String(input.locationId ?? ''), active: true } })
+      ]);
+      const startsAt = new Date(String(input.startsAt ?? ''));
+      if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) { json(response, 400, { error: 'INVALID_BOOKING_REQUEST' }); return; }
+      const allowed = Array.isArray(variant.allowedSpecies) && variant.allowedSpecies.includes(relation.pet.species);
+      if (!allowed) { json(response, 400, { error: 'SPECIES_NOT_ALLOWED' }); return; }
+      const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000);
+      const conflict = await db.appointment.findFirst({ where: { organizationId: config.organizationId, petId: relation.petId, startsAt, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } } });
+      if (conflict) { json(response, 409, { error: 'DUPLICATE_APPOINTMENT_REQUEST' }); return; }
+      const result = await db.$transaction(async (tx) => {
+        const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
+        const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: variant.priceMinor > 0 ? 'ISSUED' : 'PENDING_QUOTE', totalMinor: variant.priceMinor, currency: variant.currency } });
+        return { appointment, invoice };
+      });
+      await auditCommand({ actorId: account.current.userId, action: 'appointment.requested', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { petId: relation.petId, variantId: variant.id } });
+      json(response, 201, { appointment: { id: result.appointment.id, state: result.appointment.state, startsAt: result.appointment.startsAt, endsAt: result.appointment.endsAt }, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor, currency: result.invoice.currency } }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/dashboard') {
+      const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } }, orderBy: { startsAt: 'asc' }, take: 80 });
+      const [owners, pets, variants, invoices] = await Promise.all([
+        db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.ownerId) } } }),
+        db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.petId) } } }),
+        db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }),
+        db.invoice.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) } } })
+      ]);
+      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
+      json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—' })) }); return;
+    }
+    const staffAppointment = url.pathname.match(/^\/api\/v1\/staff\/appointments\/([^/]+)$/);
+    if (request.method === 'PATCH' && staffAppointment) {
+      const account = await currentStaff(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { action?: string; note?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const appointment = await db.appointment.findFirst({ where: { id: decodeURIComponent(staffAppointment[1]), organizationId: config.organizationId } });
+      if (!appointment) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      const action = String(input.action ?? '').toUpperCase();
+      if (action === 'CONFIRM') {
+        if (appointment.state !== 'REQUESTED') { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
+        const overlap = await db.appointment.findFirst({ where: { organizationId: config.organizationId, staffId: account.current.userId, state: { in: ['CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: appointment.endsAt }, endsAt: { gt: appointment.startsAt } } });
+        if (overlap) { json(response, 409, { error: 'STAFF_TIME_CONFLICT' }); return; }
+        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CONFIRMED', staffId: account.current.userId } });
+        await auditCommand({ actorId: account.current.userId, action: 'appointment.confirmed', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key });
+        json(response, 200, { appointment: { id: updated.id, state: updated.state, staffId: updated.staffId } }); return;
+      }
+      if (action === 'CANCEL') {
+        if (!['REQUESTED', 'CONFIRMED'].includes(appointment.state)) { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
+        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED' } });
+        await auditCommand({ actorId: account.current.userId, action: 'appointment.cancelled', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { note: String(input.note ?? '').trim().slice(0, 500) } });
+        json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
+      }
+      json(response, 400, { error: 'UNKNOWN_APPOINTMENT_ACTION' }); return;
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/auth/sign-out') {
       const current = await session(request);
@@ -367,7 +517,7 @@ const server = createServer(async (request, response) => {
       const current = await session(request); if (!current || current.mode !== 'STAFF') { redirect(response, '/auth/?mode=staff'); return; }
       const membership = await db.staffMembership.findUnique({ where: { organizationId_userId: { organizationId: config.organizationId, userId: current.userId } } });
       if (!membership || membership.state !== 'ACTIVE') { redirect(response, '/auth/?mode=staff'); return; }
-      await serve(response, staffRoot, 'index.html'); return;
+      await serveStaffHome(response); return;
     }
     if (request.method === 'GET' && url.pathname.startsWith('/staff/')) { await serve(response, staffRoot, decodeURIComponent(url.pathname.slice(7))); return; }
     if (request.method === 'GET' && (url.pathname === '/auth/' || url.pathname === '/auth' || url.pathname === '/auth/telegram.html')) { await serve(response, authRoot, 'index.html'); return; }
@@ -381,4 +531,4 @@ const server = createServer(async (request, response) => {
   } catch (error) { console.error(error); json(response, 500, { error: 'INTERNAL_ERROR' }); }
 });
 
-ensureOrganization().then(() => server.listen(config.port, '127.0.0.1', () => console.log(`VetSvet production server on ${config.port}`))).catch((error) => { console.error(error); process.exit(1); });
+ensureOrganization().then(ensureBookingFoundation).then(() => server.listen(config.port, '127.0.0.1', () => console.log(`VetSvet production server on ${config.port}`))).catch((error) => { console.error(error); process.exit(1); });
