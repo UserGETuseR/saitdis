@@ -8,7 +8,13 @@ async function experienceApi(path, method = 'GET', payload) {
     body: payload ? JSON.stringify(payload) : undefined
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || data.error || 'Не удалось выполнить действие.');
+  const friendlyErrors = {
+    BOOKING_SLOT_UNAVAILABLE: 'Это окно только что заняли. Мы уже обновляем расписание — выберите соседнее время.',
+    DUPLICATE_APPOINTMENT_REQUEST: 'Для этого питомца такая запись уже создана. Она находится ниже в списке статусов.',
+    SPECIES_NOT_ALLOWED: 'Эта услуга не подходит выбранному виду питомца. Выберите другое направление.',
+    PACKAGE_CREDIT_NOT_AVAILABLE: 'Пакет пока нельзя применить к этой записи. Выберите обычную оплату или другой пакет.'
+  };
+  if (!response.ok) throw new Error(data.message || friendlyErrors[data.error] || data.error || 'Не удалось выполнить действие.');
   return data;
 }
 
@@ -91,6 +97,65 @@ async function renderClientExperience() {
   });
   const bookingForm = document.querySelector('#booking-form');
   bookingForm?.querySelector('[data-package-picker]')?.remove();
+  if (bookingForm && !bookingForm.dataset.slotExperience) {
+    bookingForm.dataset.slotExperience = 'true';
+    bookingForm.classList.add('booking-journey');
+    bookingForm.parentElement?.classList.add('client-actions-grid');
+    const heading = bookingForm.querySelector('b');
+    const intro = bookingForm.querySelector('p');
+    if (heading) heading.textContent = 'Запись без звонка';
+    if (intro) intro.textContent = 'Выберите питомца, направление и настоящее свободное окно. VetSvet сразу сохранит заявку и покажет её статус.';
+    const variantSelect = bookingForm.querySelector('[name="variantId"]');
+    const petSelect = bookingForm.querySelector('[name="petId"]');
+    const locationInput = bookingForm.querySelector('[name="locationId"]');
+    const startsAtInput = bookingForm.querySelector('[name="startsAt"]');
+    const submit = bookingForm.querySelector('[type="submit"]');
+    if (startsAtInput && variantSelect) {
+      startsAtInput.type = 'hidden';
+      startsAtInput.required = true;
+      const tomorrow = new Date(Date.now() + 86400000); const dateValue = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
+      const journey = document.createElement('div');
+      journey.className = 'booking-slot-journey';
+      journey.innerHTML = `<div class="booking-steps"><span class="active">1 · Питомец</span><span>2 · Помощь</span><span>3 · Окно</span></div><label class="booking-date-label">Удобный день<input type="date" name="bookingDate" value="${experienceEscape(dateValue)}" min="${experienceEscape(dateValue)}"></label><div class="booking-service-note" data-service-note>Выберите направление — покажем длительность и свободные окна.</div><div class="booking-slots" data-booking-slots><span>Окна появятся после выбора питомца и услуги.</span></div><div class="booking-choice" data-booking-choice hidden></div>`;
+      startsAtInput.before(journey);
+      const dateInput = journey.querySelector('[name="bookingDate"]'); const slotsHost = journey.querySelector('[data-booking-slots]'); const note = journey.querySelector('[data-service-note]'); const choice = journey.querySelector('[data-booking-choice]');
+      const variantData = new Map((catalog.variants ?? []).map((item) => [item.id, item]));
+      const loadSlots = async () => {
+        startsAtInput.value = ''; choice.hidden = true; submit.disabled = true;
+        const variantId = variantSelect.value; const petId = petSelect?.value; const date = dateInput.value; const locationId = locationInput?.value;
+        const variant = variantData.get(variantId);
+        note.textContent = variant ? `${variant.service} · ${variant.name} · ${variant.durationMinutes} мин${variant.priceMinor > 0 ? ` · ${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` : ' · стоимость уточнит команда'}` : 'Выберите направление — покажем длительность и свободные окна.';
+        if (!variantId || !petId || !date || !locationId) { slotsHost.innerHTML = '<span>Сначала выберите питомца, затем направление и день.</span>'; return; }
+        slotsHost.innerHTML = '<span class="slot-loading">Ищем спокойные окна…</span>';
+        try {
+          const result = await experienceApi(`/api/v1/client/booking/availability?variantId=${encodeURIComponent(variantId)}&locationId=${encodeURIComponent(locationId)}&date=${encodeURIComponent(date)}`);
+          slotsHost.innerHTML = result.slots.length ? result.slots.map((slot) => `<button type="button" data-slot="${experienceEscape(slot.startsAt)}"><b>${new Date(slot.startsAt).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' })}</b><small>${slot.available > 1 ? `${slot.available} места` : 'последнее окно'}</small></button>`).join('') : '<span>На этот день свободных окон нет. Выберите соседнюю дату — ничего вводить заново не придётся.</span>';
+          slotsHost.querySelectorAll('[data-slot]').forEach((button) => button.addEventListener('click', () => {
+            slotsHost.querySelectorAll('[data-slot]').forEach((item) => item.classList.toggle('active', item === button)); startsAtInput.value = button.dataset.slot; submit.disabled = false; choice.hidden = false; choice.innerHTML = `<b>Вы выбрали ${new Date(button.dataset.slot).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}</b><span>Команда подтвердит специалиста. Все статусы останутся здесь.</span>`;
+          }));
+        } catch (error) { slotsHost.innerHTML = `<span>${experienceEscape(error.message)}</span>`; }
+      };
+      [variantSelect, petSelect, dateInput].forEach((input) => input?.addEventListener('change', loadSlots));
+      bookingForm.addEventListener('submit', async (event) => {
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (!startsAtInput.value) { slotsHost.innerHTML = '<span>Выберите одно из свободных окон.</span>'; return; }
+        const status = document.querySelector('#portal-status');
+        try {
+          submit.disabled = true; if (status) status.textContent = 'Фиксируем окно в расписании…';
+          const form = new FormData(bookingForm);
+          form.delete('bookingDate');
+          await experienceApi('/api/v1/client/appointments', 'POST', Object.fromEntries(form));
+          if (status) status.textContent = 'Готово. Заявка уже у команды VetSvet.';
+          await refresh(account.owner);
+          await renderClientExperience();
+        } catch (error) {
+          if (status) status.textContent = error.message;
+          submit.disabled = false;
+          await loadSlots();
+        }
+      }, true);
+    }
+  }
   if (bookingForm && activePackages.length) {
     const picker = document.createElement('select');
     picker.name = 'packageBalanceId';
@@ -140,6 +205,7 @@ async function renderClientExperience() {
 }
 
 const experienceStyle = document.createElement('style');
-experienceStyle.textContent = '@media(max-width:700px){#client-experience{grid-template-columns:1fr!important}#client-experience .timeline{grid-column:auto!important}#client-experience .finance-vault>div:last-child,#client-experience .care-program-grid{grid-template-columns:1fr!important}.care-program{padding-left:16px!important;padding-right:16px!important}}';
+experienceStyle.textContent = `.booking-journey{background:linear-gradient(160deg,#fff 0%,#eef8f1 100%)!important;box-shadow:0 16px 45px #07555a12}.booking-steps{display:flex;gap:6px;margin:2px 0 12px;overflow:auto}.booking-steps span{flex:1;min-width:max-content;padding:7px 9px;border-radius:99px;background:#e7ece8;color:var(--muted);font-size:10px;font-weight:800;text-align:center}.booking-steps span.active{background:var(--teal);color:#fff}.booking-date-label{display:grid;gap:6px;margin:9px 0;color:var(--muted);font-size:11px;font-weight:800}.booking-date-label input{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}.booking-service-note{margin:9px 0;padding:10px 12px;border-radius:11px;background:#10211f;color:#fff;font-size:11px;line-height:1.45}.booking-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:10px 0}.booking-slots>span{grid-column:1/-1;padding:14px;border:1px dashed #aab7af;border-radius:12px;color:var(--muted);font-size:11px;line-height:1.45}.booking-slots button{display:grid;gap:2px;padding:10px 7px;border:1px solid #c9d5cd;border-radius:12px;background:#fff;color:var(--ink);cursor:pointer}.booking-slots button b{font-size:14px}.booking-slots button small{color:var(--muted);font-size:9px}.booking-slots button.active{border-color:var(--teal);background:var(--mint);box-shadow:0 0 0 2px #07555a18}.booking-choice{display:grid;gap:3px;margin:9px 0;padding:11px;border-radius:12px;background:var(--mint);font-size:11px}.booking-choice span{color:#356258;line-height:1.4}@media(max-width:700px){#client-experience{grid-template-columns:1fr!important}#client-experience .timeline{grid-column:auto!important}#client-experience .finance-vault>div:last-child,#client-experience .care-program-grid{grid-template-columns:1fr!important}.care-program{padding-left:16px!important;padding-right:16px!important}.booking-slots{grid-template-columns:repeat(2,1fr)}}`;
+experienceStyle.textContent += `.client-actions-grid{grid-template-columns:minmax(220px,.72fr) minmax(360px,1.28fr)!important}.booking-journey{position:relative;overflow:hidden}.booking-journey:after{content:"";position:absolute;width:190px;height:190px;right:-90px;top:-105px;border:1px solid #07555a22;border-radius:50%;box-shadow:0 0 0 32px #c9f8d922,0 0 0 64px #07555a0a;pointer-events:none}@media(max-width:700px){.client-actions-grid{grid-template-columns:1fr!important}}`;
 document.head.append(experienceStyle);
 setTimeout(() => renderClientExperience().catch(() => {}), 500);

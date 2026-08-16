@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { buildBookingSlots, dateKeyInMoscow } from '../../api/src/booking-slots';
 
 type AuthMode = 'CLIENT' | 'STAFF';
 type TgUpdate = {
@@ -79,6 +80,32 @@ async function currentStaff(request: IncomingMessage) {
   if (!current || current.mode !== 'STAFF') return undefined;
   const membership = await db.staffMembership.findUnique({ where: { organizationId_userId: { organizationId: config.organizationId, userId: current.userId } } });
   return membership?.state === 'ACTIVE' ? { current, membership } : undefined;
+}
+
+const bookingRoles = (kind: string) => kind === 'GROOMING'
+  ? ['ADMIN', 'GROOMER']
+  : kind === 'VETERINARY'
+    ? ['ADMIN', 'VETERINARIAN']
+    : ['ADMIN', 'MANAGER', 'VETERINARIAN', 'GROOMER'];
+
+async function bookingAvailability(variantId: string, locationId: string, date: string) {
+  const [variant, location] = await Promise.all([
+    db.serviceVariant.findFirst({ where: { id: variantId, organizationId: config.organizationId, service: { onlineBookable: true } }, include: { service: true } }),
+    db.location.findFirst({ where: { id: locationId, organizationId: config.organizationId, active: true } })
+  ]);
+  if (!variant || !location || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
+  const dayStart = new Date(`${date}T00:00:00+03:00`);
+  const dayEnd = new Date(`${date}T23:59:59.999+03:00`);
+  if (Number.isNaN(dayStart.valueOf()) || dayEnd < new Date(Date.now() - 86400000) || dayStart > new Date(Date.now() + 120 * 86400000)) return undefined;
+  const [staffCount, appointments] = await Promise.all([
+    db.staffMembership.count({ where: { organizationId: config.organizationId, state: 'ACTIVE', role: { in: bookingRoles(variant.service.kind) } } }),
+    db.appointment.findMany({ where: { organizationId: config.organizationId, locationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } } })
+  ]);
+  const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
+  const kindByVariant = new Map(variants.map((item) => [item.id, item.service.kind]));
+  const busy = appointments.filter((item) => kindByVariant.get(item.variantId) === variant.service.kind).map((item) => ({ startsAt: item.startsAt, endsAt: item.endsAt }));
+  const capacity = Math.max(1, Math.min(location.bookingCapacity || 1, staffCount || 1));
+  return { variant, location, slots: buildBookingSlots({ date, durationMinutes: variant.durationMinutes, bufferBeforeMinutes: variant.bufferBeforeMinutes, bufferAfterMinutes: variant.bufferAfterMinutes, capacity, busy }) };
 }
 function idempotencyKey(request: IncomingMessage) {
   const key = String(request.headers['idempotency-key'] ?? '').trim();
@@ -873,6 +900,13 @@ const server = createServer(async (request, response) => {
       ]);
       json(response, 200, { locations: locations.map((location) => ({ id: location.id, name: location.name })), variants: variants.map((variant) => ({ id: variant.id, service: variant.service.publicName, name: variant.name, kind: variant.service.kind, durationMinutes: variant.durationMinutes, priceMinor: variant.priceMinor, currency: variant.currency, allowedSpecies: variant.allowedSpecies })) }); return;
     }
+    if (request.method === 'GET' && url.pathname === '/api/v1/client/booking/availability') {
+      const account = await currentOwner(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const variantId = String(url.searchParams.get('variantId') ?? ''); const locationId = String(url.searchParams.get('locationId') ?? ''); const date = String(url.searchParams.get('date') ?? '');
+      const availability = await bookingAvailability(variantId, locationId, date);
+      if (!availability) { json(response, 400, { error: 'INVALID_AVAILABILITY_REQUEST' }); return; }
+      json(response, 200, { date, timezone: availability.location.timezone, location: { id: availability.location.id, name: availability.location.name }, variant: { id: availability.variant.id, name: availability.variant.name, service: availability.variant.service.publicName, kind: availability.variant.service.kind, durationMinutes: availability.variant.durationMinutes }, slots: availability.slots }); return;
+    }
     if (request.method === 'POST' && url.pathname === '/api/v1/client/appointments') {
       const account = await currentOwner(request); const key = idempotencyKey(request);
       if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
@@ -889,6 +923,8 @@ const server = createServer(async (request, response) => {
       const allowed = Array.isArray(variant.allowedSpecies) && variant.allowedSpecies.includes(relation.pet.species);
       if (!allowed) { json(response, 400, { error: 'SPECIES_NOT_ALLOWED' }); return; }
       if (variant.service.kind === 'CONSULTATION') { json(response, 400, { error: 'USE_CONSULTATION_WORKFLOW' }); return; }
+      const availability = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt));
+      if (!availability?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) { json(response, 409, { error: 'BOOKING_SLOT_UNAVAILABLE' }); return; }
       if (input.packageBalanceId) {
         const eligibleServices = Array.isArray(packageBalance?.servicePackage.serviceIds) ? packageBalance.servicePackage.serviceIds.map(String) : [];
         if (!packageBalance || packageBalance.state !== 'ACTIVE' || packageBalance.remainingCredits < 1 || (packageBalance.expiresAt && packageBalance.expiresAt <= new Date()) || (!packageBalance.servicePackage.familyShared && packageBalance.petId !== relation.petId) || !eligibleServices.includes(variant.id)) { json(response, 409, { error: 'PACKAGE_CREDIT_NOT_AVAILABLE' }); return; }
@@ -896,7 +932,17 @@ const server = createServer(async (request, response) => {
       const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000);
       const conflict = await db.appointment.findFirst({ where: { organizationId: config.organizationId, petId: relation.petId, startsAt, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } } });
       if (conflict) { json(response, 409, { error: 'DUPLICATE_APPOINTMENT_REQUEST' }); return; }
+      let bookingFailure: string | undefined;
       const result = await db.$transaction(async (tx) => {
+        const lockKeys = [
+          `booking:${config.organizationId}:${location.id}:${variant.service.kind}:${dateKeyInMoscow(startsAt)}`,
+          `pet:${config.organizationId}:${relation.petId}`
+        ].sort();
+        for (const lockKey of lockKeys) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        const lockedAvailability = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt));
+        if (!lockedAvailability?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) throw new Error('BOOKING_SLOT_CHANGED');
+        const lockedConflict = await tx.appointment.findFirst({ where: { organizationId: config.organizationId, petId: relation.petId, startsAt, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } } });
+        if (lockedConflict) throw new Error('DUPLICATE_APPOINTMENT_CHANGED');
         const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
         if (packageBalance) {
           const claimed = await tx.packageBalance.updateMany({ where: { id: packageBalance.id, organizationId: config.organizationId, state: 'ACTIVE', remainingCredits: { gt: 0 } }, data: { remainingCredits: { decrement: 1 }, ...(packageBalance.remainingCredits === 1 ? { state: 'DEPLETED' } : {}) } });
@@ -912,8 +958,13 @@ const server = createServer(async (request, response) => {
           await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Согласие VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.current.userId } });
         }
         return { appointment, invoice };
-      }).catch((error: Error) => { if (error.message === 'PACKAGE_CREDIT_CHANGED') return null; throw error; });
-      if (!result) { json(response, 409, { error: 'PACKAGE_CREDIT_CHANGED_RETRY' }); return; }
+      }).catch((error: Error) => {
+        if (['PACKAGE_CREDIT_CHANGED', 'BOOKING_SLOT_CHANGED', 'DUPLICATE_APPOINTMENT_CHANGED'].includes(error.message)) { bookingFailure = error.message; return null; }
+        throw error;
+      });
+      if (!result) {
+        json(response, 409, { error: bookingFailure === 'BOOKING_SLOT_CHANGED' ? 'BOOKING_SLOT_UNAVAILABLE' : bookingFailure === 'DUPLICATE_APPOINTMENT_CHANGED' ? 'DUPLICATE_APPOINTMENT_REQUEST' : 'PACKAGE_CREDIT_CHANGED_RETRY' }); return;
+      }
       await auditCommand({ actorId: account.current.userId, action: 'appointment.requested', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { petId: relation.petId, variantId: variant.id, packageBalanceId: packageBalance?.id } });
       json(response, 201, { appointment: { id: result.appointment.id, state: result.appointment.state, startsAt: result.appointment.startsAt, endsAt: result.appointment.endsAt }, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor, currency: result.invoice.currency } }); return;
     }
@@ -1002,6 +1053,41 @@ const server = createServer(async (request, response) => {
       ]);
       const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item])); const consultationByAppointment = new Map(consultations.map((item) => [item.appointmentId, item])); const encounterByAppointment = new Map(encounters.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const hospitalizationByAppointment = new Map(hospitalizations.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
       json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => ({ id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoiceByAppointment.get(item.id)?.state ?? '—', hospitalization: hospitalizationByAppointment.get(item.id) ? { id: hospitalizationByAppointment.get(item.id)!.id, state: hospitalizationByAppointment.get(item.id)!.state } : undefined, encounter: encounterByAppointment.get(item.id) ? { id: encounterByAppointment.get(item.id)!.id, state: encounterByAppointment.get(item.id)!.state, assessment: encounterByAppointment.get(item.id)!.assessment, plan: encounterByAppointment.get(item.id)!.plan } : undefined, consultation: consultationByAppointment.get(item.id) ? { id: consultationByAppointment.get(item.id)!.id, state: consultationByAppointment.get(item.id)!.state, paymentState: consultationByAppointment.get(item.id)!.paymentState, question: consultationByAppointment.get(item.id)!.question, response: consultationByAppointment.get(item.id)!.response } : undefined, groomingVisit: groomingByAppointment.get(item.id) ? { id: groomingByAppointment.get(item.id)!.id, state: groomingByAppointment.get(item.id)!.state, report: groomingByAppointment.get(item.id)!.report } : undefined })) }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/booking/board') {
+      const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const date = String(url.searchParams.get('date') ?? dateKeyInMoscow(new Date()));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { json(response, 400, { error: 'INVALID_DATE' }); return; }
+      const dayStart = new Date(`${date}T00:00:00+03:00`); const dayEnd = new Date(`${date}T23:59:59.999+03:00`);
+      const [appointments, locations, variants, memberships] = await Promise.all([
+        db.appointment.findMany({ where: { organizationId: config.organizationId, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } }, orderBy: { startsAt: 'asc' }, take: 300 }),
+        db.location.findMany({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } }),
+        db.serviceVariant.findMany({ where: { organizationId: config.organizationId }, include: { service: true }, orderBy: { service: { publicName: 'asc' } } }),
+        db.staffMembership.findMany({ where: { organizationId: config.organizationId, state: 'ACTIVE' }, include: { user: true }, orderBy: { role: 'asc' } })
+      ]);
+      const [owners, pets] = await Promise.all([
+        db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.ownerId) } } }),
+        db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.petId) } } })
+      ]);
+      const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item]));
+      json(response, 200, { date, timezone: 'Europe/Moscow', locations: locations.map((item) => ({ id: item.id, name: item.name, bookingCapacity: item.bookingCapacity })), variants: variants.map((item) => ({ id: item.id, service: item.service.publicName, kind: item.service.kind, name: item.name, durationMinutes: item.durationMinutes, priceMinor: item.priceMinor })), staff: memberships.map((item) => ({ id: item.userId, role: item.role, name: item.user.login ?? item.user.email ?? item.user.phone ?? item.role })), appointments: appointments.map((item) => ({ id: item.id, ownerId: item.ownerId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', petId: item.petId, pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', variantId: item.variantId, service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', staffId: item.staffId, startsAt: item.startsAt, endsAt: item.endsAt, state: item.state })) }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/care-directory') {
+      const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const owners = await db.owner.findMany({ where: { organizationId: config.organizationId, accountStatus: { not: 'BLOCKED' } }, include: { relations: { include: { pet: true } } }, orderBy: { updatedAt: 'desc' }, take: 250 });
+      const petIds = owners.flatMap((owner) => owner.relations.map((relation) => relation.petId));
+      const [appointments, profiles, recipes, groomingVisits, clinicalCases, carePlans] = await Promise.all([
+        db.appointment.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { startsAt: 'desc' }, take: 1500 }),
+        db.groomingProfile.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } } }),
+        db.groomingRecipe.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds }, isPreferred: true }, orderBy: { createdAt: 'desc' } }),
+        db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 800 }),
+        db.clinicalCase.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, include: { encounters: { where: { state: 'FINALIZED' }, orderBy: { finalizedAt: 'desc' }, take: 3 } }, orderBy: { openedAt: 'desc' }, take: 800 }),
+        db.carePlan.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds }, state: 'ACTIVE' }, include: { tasks: { where: { state: { in: ['OPEN', 'IN_PROGRESS'] } }, orderBy: { dueAt: 'asc' } } } })
+      ]);
+      const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }); const variantById = new Map(variants.map((item) => [item.id, item]));
+      const now = new Date(); const profileByPet = new Map(profiles.map((item) => [item.petId, item])); const recipeByPet = new Map(recipes.map((item) => [item.petId, item]));
+      const rows = owners.map((owner) => ({ id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email, preferredChannel: owner.preferredChannel, tags: owner.tags, pets: owner.relations.map((relation) => { const pet = relation.pet; const petAppointments = appointments.filter((item) => item.petId === pet.id); const profile = profileByPet.get(pet.id); const recipe = recipeByPet.get(pet.id); const visits = groomingVisits.filter((item) => item.petId === pet.id); const cases = clinicalCases.filter((item) => item.petId === pet.id); const plans = carePlans.filter((item) => item.petId === pet.id); const next = petAppointments.filter((item) => item.startsAt >= now && !['CANCELLED', 'COMPLETED'].includes(item.state)).sort((a, b) => a.startsAt.valueOf() - b.startsAt.valueOf())[0]; const last = petAppointments.filter((item) => item.startsAt < now && item.state === 'COMPLETED')[0]; return { id: pet.id, name: pet.name, species: pet.species, breed: pet.breed, sex: pet.sex, birthDate: pet.birthDate, lifecycle: pet.lifecycle, medicalAlerts: pet.medicalAlerts, chronicConditions: pet.chronicConditions, behavioralAlerts: pet.behavioralAlerts, vaccinationDueAt: pet.vaccinationDueAt, grooming: profile ? { coatType: profile.coatType, sensitivities: profile.sensitivities, behaviorNotes: profile.behaviorNotes, preferredStyle: profile.preferredStyle, recipe: recipe ? { id: recipe.id, title: recipe.title, steps: recipe.steps } : undefined, lastReport: visits.find((item) => item.state === 'COMPLETE')?.report, lastCompletedAt: visits.find((item) => item.state === 'COMPLETE')?.completedAt } : undefined, nextAppointment: next ? { id: next.id, state: next.state, startsAt: next.startsAt, service: variantById.get(next.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(next.variantId)?.service.kind ?? 'OTHER' } : undefined, lastAppointment: last ? { id: last.id, startsAt: last.startsAt, service: variantById.get(last.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(last.variantId)?.service.kind ?? 'OTHER' } : undefined, clinical: cases.flatMap((item) => item.encounters.map((encounter) => ({ reason: item.reason, assessment: encounter.assessment, plan: encounter.plan, occurredAt: encounter.finalizedAt ?? item.openedAt }))).slice(0, 5), careTasks: plans.flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, category: task.category, dueAt: task.dueAt, state: task.state }))).slice(0, 10) }; }) }));
+      json(response, 200, { owners: rows, summary: { owners: rows.length, pets: rows.reduce((sum, owner) => sum + owner.pets.length, 0), groomingProfiles: profiles.length, upcoming: appointments.filter((item) => item.startsAt >= now && !['CANCELLED', 'COMPLETED'].includes(item.state)).length } }); return;
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/finance/dashboard') {
       const account = await currentStaff(request);

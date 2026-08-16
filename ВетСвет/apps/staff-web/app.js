@@ -147,7 +147,14 @@ async function loadStaff() {
   const crm = ['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/crm/dashboard') : { owners: [], tasks: [], summary: {} };
   const analytics = ['ADMIN', 'MANAGER'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/analytics/dashboard?days=30') : null;
   const growth = ['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/growth/dashboard') : null;
+  const [booking, care] = await Promise.all([
+    staffApi(`/api/v1/staff/booking/board?date=${new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}`),
+    staffApi('/api/v1/staff/care-directory')
+  ]);
   renderStaff(dashboard, hospital, inventory, finance, crm, analytics, growth);
+  window.vetsvetWorkspaceData = { dashboard, hospital, inventory, finance, crm, analytics, growth, booking, care };
+  window.dispatchEvent(new CustomEvent('vetsvet:workspace-data', { detail: window.vetsvetWorkspaceData }));
 }
 
+window.vetsvetReloadStaff = loadStaff;
 loadStaff().catch(() => location.assign('/auth/?mode=staff'));

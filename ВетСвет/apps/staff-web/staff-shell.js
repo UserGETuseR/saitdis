@@ -56,8 +56,16 @@
     const labels = { today: 'Сегодня', schedule: 'Запись', patients: 'Пациенты', clinical: 'Медицина', grooming: 'Груминг', consultations: 'Консультации', hospital: 'Стационар', inbox: 'Сообщения', tasks: 'Задачи', inventory: 'Склад', finance: 'Финансы', crm: 'CRM', growth: 'Лояльность', analytics: 'Отчёты', settings: 'Настройки' };
     const list = allowedRoutes(); let group = '';
     nav.innerHTML = list.map((route) => { const heading = group === route.group ? '' : `<div class="nav-group">${escapeHtml(route.group)}</div>`; group = route.group; return `${heading}<a class="module-link" data-route="${route.id}" href="#/${route.id}"><i>${route.icon}</i><span>${escapeHtml(labels[route.id])}</span>${route.id === 'inbox' ? '<em>live</em>' : ''}</a>`; }).join('');
-    const dockIds = ['today', 'schedule', 'patients', 'tasks'];
-    dock.innerHTML = dockIds.map((id) => { const route = routeById.get(id); return `<a class="dock-link" data-route="${id}" href="#/${id}"><i>${route.icon}</i><span>${id === 'today' ? 'Сегодня' : id === 'schedule' ? 'Запись' : id === 'patients' ? 'Пациенты' : 'Задачи'}</span></a>`; }).join('') + '<button class="dock-link" id="dock-more" type="button"><i>•••</i><span>Ещё</span></button>';
+    const roleDock = {
+      ADMIN: ['today', 'schedule', 'grooming', 'patients'],
+      MANAGER: ['today', 'schedule', 'grooming', 'patients'],
+      VETERINARIAN: ['today', 'schedule', 'clinical', 'patients'],
+      GROOMER: ['today', 'schedule', 'grooming', 'patients'],
+      ASSISTANT: ['today', 'schedule', 'clinical', 'patients'],
+      RECEPTIONIST: ['today', 'schedule', 'patients', 'tasks']
+    };
+    const dockIds = (roleDock[currentRole] || roleDock.ADMIN).filter((id) => routeById.get(id)?.roles.includes(currentRole));
+    dock.innerHTML = dockIds.map((id) => { const route = routeById.get(id); return `<a class="dock-link" data-route="${id}" href="#/${id}"><i>${route.icon}</i><span>${escapeHtml(labels[id])}</span></a>`; }).join('') + '<button class="dock-link" id="dock-more" type="button"><i>•••</i><span>Ещё</span></button>';
     document.querySelector('#dock-more')?.addEventListener('click', openRail);
   }
 
