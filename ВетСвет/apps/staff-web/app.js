@@ -143,6 +143,7 @@ async function loadStaff() {
   window.dispatchEvent(new CustomEvent('vetsvet:data-ready', { detail: { role: dashboard.account.role } }));
   const hospital = ['ADMIN', 'VETERINARIAN', 'ASSISTANT'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/hospital/dashboard') : { beds: [], admissions: [] };
   const inventory = ['ADMIN', 'MANAGER', 'VETERINARIAN', 'ASSISTANT'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/inventory/dashboard') : { items: [], locations: [], movements: [] };
+  const grooming = ['ADMIN', 'MANAGER', 'GROOMER', 'ASSISTANT'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/grooming/dashboard') : { items: [], locations: [], materialsByVisit: {}, summary: {} };
   const finance = ['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/finance/dashboard') : { invoices: [], templates: [] };
   const crm = ['ADMIN', 'MANAGER', 'RECEPTIONIST'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/crm/dashboard') : { owners: [], tasks: [], summary: {} };
   const analytics = ['ADMIN', 'MANAGER'].includes(dashboard.account.role) ? await staffApi('/api/v1/staff/analytics/dashboard?days=30') : null;
@@ -152,7 +153,7 @@ async function loadStaff() {
     staffApi('/api/v1/staff/care-directory')
   ]);
   renderStaff(dashboard, hospital, inventory, finance, crm, analytics, growth);
-  window.vetsvetWorkspaceData = { dashboard, hospital, inventory, finance, crm, analytics, growth, booking, care };
+  window.vetsvetWorkspaceData = { dashboard, hospital, inventory, grooming, finance, crm, analytics, growth, booking, care };
   window.dispatchEvent(new CustomEvent('vetsvet:workspace-data', { detail: window.vetsvetWorkspaceData }));
 }
 

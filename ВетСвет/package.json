@@ -10,6 +10,7 @@
     "test:telegram": "..\\node_modules\\.bin\\tsx.cmd apps\\telegram-bot\\tests\\webhook.spec.ts && ..\\node_modules\\.bin\\tsx.cmd apps\\telegram-bot\\tests\\workflow.spec.ts",
     "test:worker": "..\\node_modules\\.bin\\tsx.cmd apps\\worker\\tests\\outbox-worker.spec.ts",
     "test:booking": "tsx apps/api/tests/booking-slots.spec.ts",
+    "test:grooming": "tsx apps/api/tests/grooming-workflow.spec.ts",
     "test:production-channel": "tsx apps/telegram-bot/tests/production-channel.spec.ts"
   },
   "dependencies": {
