@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Чайная история · китайский чай, ГАБА, пуэр и грибы-адаптогены</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#14100b" />
+  <meta name="description" content="Китайский чай, ГАБА, пуэр и грибы-адаптогены. Эликсиры состояний, чайный паспорт и практики." />
+  <link rel="icon" type="image/svg+xml" href="img/icon.svg" />
+  <link rel="apple-touch-icon" href="img/icon.svg" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Чайная" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Noto+Sans:wght@300;400;500&family=Noto+Serif+SC:wght@400;600;700&family=Playfair+Display:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="assets/css/styles.css?v=12" />
+</head>
+<body>
+
+  <!-- Сплеш-заставка с Чайным Дедом -->
+  <div id="splash" class="splash">
+    <div class="splash-inner">
+      <div class="sp-ded-wrap">
+        <span class="sp-ded-glow"></span>
+        <svg class="sp-ded2" viewBox="0 0 64 64" aria-hidden="true" stroke-linejoin="round">
+          <path d="M22 27c0-7.2 4.5-12 10-12s10 4.8 10 12c0 4-1.4 6.6-3.4 8.2H25.4C23.4 33.6 22 31 22 27Z" fill="#f1e6cf" stroke="#7a2f17" stroke-width="1.6"/>
+          <circle cx="32" cy="9.8" r="2" fill="#f1e6cf" stroke="#7a2f17" stroke-width="1.2"/>
+          <g fill="none" stroke="#7a2f17" stroke-width="1.7" stroke-linecap="round">
+            <path d="M25.5 25.6c1.2-1.4 3.4-1.4 4.6-.2"/>
+            <path d="M38.5 25.6c-1.2-1.4-3.4-1.4-4.6-.2"/>
+            <path d="M26 29.6c1-1 2.6-1 3.6 0"/>
+            <path d="M34.4 29.6c1-1 2.6-1 3.6 0"/>
+            <path d="M31.2 30.5l-1 4.2c0 1.4 2.6 1.4 2.6 0"/>
+          </g>
+          <path d="M25.4 34c-1.2 4.6-1 9.2 1.2 12.6 1.6 2.5 3.5 3.4 5.4 3.4s3.8-.9 5.4-3.4c2.2-3.4 2.4-8 1.2-12.6Z" fill="#f1e6cf" stroke="#7a2f17" stroke-width="1.6"/>
+          <path d="M28.5 36.5c2.2 1.6 4.8 1.6 7 0" fill="none" stroke="#7a2f17" stroke-width="1.3"/>
+          <path d="M18.5 47.5h27c-1 6-6.4 9-13.5 9S19.5 53.5 18.5 47.5Z" fill="#f1e6cf" stroke="#7a2f17" stroke-width="1.6"/>
+          <path d="M16.5 47h31" stroke="#7a2f17" stroke-width="2" stroke-linecap="round" fill="none"/>
+        </svg>
+      </div>
+
+      <div class="sp-stroke">
+        <div class="sp-stroke-paint">
+          <svg class="sp-stroke-svg" viewBox="0 0 600 150" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <defs>
+              <linearGradient id="spStrokeG" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#df7d3c"/><stop offset="50%" stop-color="#f3a35a"/><stop offset="100%" stop-color="#df7d3c"/>
+              </linearGradient>
+              <filter id="spBrush" x="-12%" y="-40%" width="124%" height="180%">
+                <feTurbulence type="fractalNoise" baseFrequency="0.013 0.028" numOctaves="2" seed="6" result="n"/>
+                <feDisplacementMap in="SourceGraphic" in2="n" scale="12" xChannelSelector="R" yChannelSelector="G" result="d"/>
+                <feGaussianBlur in="d" stdDeviation="0.8"/>
+              </filter>
+            </defs>
+            <path filter="url(#spBrush)" fill="url(#spStrokeG)" d="M34 78 C150 54 300 58 472 62 C522 64 556 70 568 76 C540 94 472 98 300 98 C150 100 88 92 34 78 Z"/>
+          </svg>
+        </div>
+        <div class="sp-title">Чайная история</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Верхняя навигация -->
+  <nav class="topbar">
+    <a class="logo" data-route="/" href="#/">
+      <svg class="ded-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <linearGradient id="dedFace" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#f3e8d2" /><stop offset="1" stop-color="#e6d3ac" />
+          </linearGradient>
+          <linearGradient id="dedBowl" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#e8783e" /><stop offset="1" stop-color="#c34a2c" />
+          </linearGradient>
+        </defs>
+        <g fill="none" stroke="#7a5a32" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <!-- пар -->
+          <path d="M27 9c-1.6 1.7-1.6 3.4 0 5.1" opacity=".8" />
+          <path d="M32 7c-1.6 1.9-1.6 3.8 0 5.7" opacity=".8" />
+          <path d="M37 9c1.6 1.7 1.6 3.4 0 5.1" opacity=".8" />
+        </g>
+        <!-- лицо / лоб лысина -->
+        <path d="M22 27c0-7.2 4.5-12 10-12s10 4.8 10 12c0 4-1.4 6.6-3.4 8.2H25.4C23.4 33.6 22 31 22 27Z" fill="url(#dedFace)" stroke="#7a5a32" stroke-width="2" stroke-linejoin="round" />
+        <!-- топ-узел мудреца -->
+        <path d="M32 15c0-2.4 0-4.4 0-4.4" stroke="#7a5a32" stroke-width="2" stroke-linecap="round" />
+        <circle cx="32" cy="9.5" r="2.2" fill="url(#dedBowl)" stroke="#7a5a32" stroke-width="1.6" />
+        <g fill="none" stroke="#7a5a32" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <!-- брови -->
+          <path d="M25.5 25.5c1.2-1.4 3.4-1.4 4.6-.2" />
+          <path d="M38.5 25.5c-1.2-1.4-3.4-1.4-4.6-.2" />
+          <!-- глаза-щёлочки добрые -->
+          <path d="M26 29.4c1-0.9 2.6-0.9 3.6 0" />
+          <path d="M34.4 29.4c1-0.9 2.6-0.9 3.6 0" />
+        </g>
+        <!-- борода -->
+        <path d="M25.4 34c-1.2 4.5-1 9 1.2 12.4 1.6 2.5 3.5 3.4 5.4 3.4s3.8-.9 5.4-3.4c2.2-3.4 2.4-7.9 1.2-12.4Z" fill="url(#dedFace)" stroke="#7a5a32" stroke-width="2" stroke-linejoin="round" />
+        <path d="M30 35.5c1.3 1 2.7 1 4 0" fill="none" stroke="#7a5a32" stroke-width="1.8" stroke-linecap="round" />
+        <!-- пиала -->
+        <path d="M19 49h26c-1 6.2-6.4 9.5-13 9.5S20 55.2 19 49Z" fill="url(#dedBowl)" stroke="#7a5a32" stroke-width="2" stroke-linejoin="round" />
+        <path d="M17 48.4h30" stroke="#7a5a32" stroke-width="2.4" stroke-linecap="round" />
+      </svg>
+      <span class="logo-text">Чайная<br/>история</span>
+    </a>
+    <div class="nav-links" id="navLinks"></div>
+    <div class="nav-auth" id="navAuth"></div>
+    <button id="cartBtn" class="cart-btn" title="Моя чашка">
+      <i class="bi bi-cup-hot-fill"></i> <span class="cart-count hidden">0</span>
+    </button>
+  </nav>
+
+  <!-- Контейнер экранов -->
+  <main id="app"></main>
+
+  <!-- Нижняя таб-панель (мобайл) -->
+  <nav class="tabbar" id="tabLinks"></nav>
+
+  <footer class="foot">
+    <div class="foot-grid wrap">
+      <div class="foot-brand">
+        <svg class="ded-mark foot-ded" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="dedFaceF" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f3e8d2" /><stop offset="1" stop-color="#e6d3ac" />
+            </linearGradient>
+            <linearGradient id="dedBowlF" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#e8783e" /><stop offset="1" stop-color="#c34a2c" />
+            </linearGradient>
+          </defs>
+          <g fill="none" stroke="#7a5a32" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M27 9c-1.6 1.7-1.6 3.4 0 5.1" opacity=".8" />
+            <path d="M32 7c-1.6 1.9-1.6 3.8 0 5.7" opacity=".8" />
+            <path d="M37 9c1.6 1.7 1.6 3.4 0 5.1" opacity=".8" />
+          </g>
+          <path d="M22 27c0-7.2 4.5-12 10-12s10 4.8 10 12c0 4-1.4 6.6-3.4 8.2H25.4C23.4 33.6 22 31 22 27Z" fill="url(#dedFaceF)" stroke="#7a5a32" stroke-width="2" stroke-linejoin="round" />
+          <circle cx="32" cy="9.5" r="2.2" fill="url(#dedBowlF)" stroke="#7a5a32" stroke-width="1.6" />
+          <g fill="none" stroke="#7a5a32" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M25.5 25.5c1.2-1.4 3.4-1.4 4.6-.2" />
+            <path d="M38.5 25.5c-1.2-1.4-3.4-1.4-4.6-.2" />
+            <path d="M26 29.4c1-0.9 2.6-0.9 3.6 0" />
+            <path d="M34.4 29.4c1-0.9 2.6-0.9 3.6 0" />
+          </g>
+          <path d="M25.4 34c-1.2 4.5-1 9 1.2 12.4 1.6 2.5 3.5 3.4 5.4 3.4s3.8-.9 5.4-3.4c2.2-3.4 2.4-7.9 1.2-12.4Z" fill="url(#dedFaceF)" stroke="#7a5a32" stroke-width="2" stroke-linejoin="round" />
+          <path d="M30 35.5c1.3 1 2.7 1 4 0" fill="none" stroke="#7a5a32" stroke-width="1.8" stroke-linecap="round" />
+          <path d="M19 49h26c-1 6.2-6.4 9.5-13 9.5S20 55.2 19 49Z" fill="url(#dedBowlF)" stroke="#7a5a32" stroke-width="2" stroke-linejoin="round" />
+          <path d="M17 48.4h30" stroke="#7a5a32" stroke-width="2.4" stroke-linecap="round" />
+        </svg>
+        <div class="foot-brand-name">Чайная история</div>
+        <div class="foot-motto">«Чай пей и добрей»</div>
+      </div>
+
+      <div class="foot-contacts">
+        <div class="foot-h">Связаться с нами</div>
+        <a class="foot-phone" href="tel:+79628886880">
+          <i class="bi bi-telephone-fill"></i>
+          <span>+7 962 888‑68‑80</span>
+        </a>
+        <div class="foot-sub">Запись на церемонию, заказ чая и консультация</div>
+        <div class="foot-apps">
+          <span class="store-badge"><i class="bi bi-apple"></i> App Store</span>
+          <span class="store-badge"><i class="bi bi-google-play"></i> Google Play</span>
+        </div>
+      </div>
+    </div>
+    <div class="foot-base">Место, где время замедляется · © Чайная история</div>
+  </footer>
+
+  <!-- Корзина (drawer) -->
+  <div id="cartOverlay" class="cart-overlay"></div>
+  <aside id="cart" class="cart">
+    <div class="cart-head">
+      <h3><i class="bi bi-cup-hot-fill"></i> Моя чашка</h3>
+      <button id="cartClose" class="modal-x"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div id="cartBody" class="cart-body"></div>
+    <div class="cart-foot">
+      <div class="cart-total-row"><span>Итого</span><span id="cartTotal">0 ₽</span></div>
+      <button id="checkoutBtn" class="btn primary full"><i class="bi bi-check2-circle"></i> Оформить (демо)</button>
+    </div>
+  </aside>
+
+  <!-- Модалка выбора гриба -->
+  <div id="modal" class="modal"></div>
+
+  <script src="assets/js/data.teas.js"></script>
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/data.mushrooms.js"></script>
+  <script src="assets/js/data.elixirs.js"></script>
+  <script src="assets/js/data.services.js"></script>
+  <script src="assets/js/data.drinks.js"></script>
+  <script src="assets/js/data.events.js"></script>
+  <script src="assets/js/data.practices.js"></script>
+  <script src="assets/js/db.js"></script>
+  <script src="assets/js/inventory.js"></script>
+  <script src="assets/js/orders.js"></script>
+  <script src="assets/js/shifts.js"></script>
+  <script src="assets/js/store.js"></script>
+  <script src="assets/js/auth.js"></script>
+  <script src="assets/js/ui.js"></script>
+  <script src="assets/js/views.js"></script>
+  <script src="assets/js/app.js"></script>
+
+  <script>
+    // Регистрация service worker (PWA: установка на телефон + офлайн).
+    // Работает только по http(s)/localhost, не по file://
+    if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function () {});
+      });
+    }
+  </script>
+
+  <script>
+    (function () {
+      var s = document.getElementById("splash");
+      if (!s) return;
+      var done = false, started = false;
+      function start() {
+        if (started) return; started = true;
+        s.classList.add("in");
+        setTimeout(hide, 4200);          // показ ~4.2с после старта
+      }
+      function hide() {
+        if (done) return; done = true;
+        s.classList.add("hide");
+        setTimeout(function () { if (s && s.parentNode) s.parentNode.removeChild(s); }, 1300);
+      }
+      s.addEventListener("click", hide);
+      // запуск только когда шрифты готовы — иначе текст «дёргается» при подмене шрифта
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () { requestAnimationFrame(start); });
+        setTimeout(start, 1200);         // подстраховка, если шрифты долго грузятся
+      } else {
+        requestAnimationFrame(function () { requestAnimationFrame(start); });
+      }
+    })();
+  </script>
+</body>
+</html>
