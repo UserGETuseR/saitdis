@@ -86,6 +86,12 @@
   function render() {
     if (!data) return; const board = document.querySelector('.workspace .board'); if (!board) return;
     board.querySelectorAll('.core-workspace').forEach((item) => item.remove());
+    board.querySelectorAll(':scope > .card:not(.core-workspace)').forEach((item) => {
+      const modules = String(item.dataset.modules || '').split(' ');
+      const title = item.querySelector('h2')?.textContent.trim().toLowerCase() || '';
+      const replacedByTitle = /^(расписание|очередь записи|груминг в работе)/i.test(title);
+      item.toggleAttribute('data-core-replaced', replacedByTitle || modules.some((module) => ['schedule', 'patients', 'grooming'].includes(module)));
+    });
     board.insertAdjacentHTML('beforeend', `${renderFoundation()}${renderSchedule()}${renderPatients()}${renderGrooming()}`);
     bind(board); window.dispatchEvent(new CustomEvent('vetsvet:data-ready', { detail: { role: data.dashboard.account.role } }));
   }

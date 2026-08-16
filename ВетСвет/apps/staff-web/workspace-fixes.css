@@ -1,0 +1,17 @@
+.board > .card.core-workspace {
+  grid-column: 1 / -1 !important;
+}
+
+.board > .card.care-foundation {
+  color: #fff !important;
+  background: radial-gradient(circle at 75% 25%, rgba(157, 247, 201, .17), transparent 29%), linear-gradient(125deg, #062724 0%, #084a46 54%, #071f1f 100%) !important;
+}
+
+.board > .card.groom-studio {
+  color: #fff !important;
+  background: linear-gradient(135deg, #0c2927 0%, #13483f 45%, #624738 100%) !important;
+}
+
+.board > .card[data-core-replaced] {
+  display: none !important;
+}
