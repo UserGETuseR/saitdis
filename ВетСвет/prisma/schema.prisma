@@ -237,6 +237,7 @@ model Owner {
   source           String?
   utm              Json               @default("{}")
   notes            String?
+  createdIdempotencyKey String?        @unique
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @default(now()) @updatedAt
   organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -248,6 +249,7 @@ model Owner {
   consents         Consent[]
   surgicalCases    SurgicalCase[]
   dentalCharts     DentalChart[]
+  files            PetFile[]
 
   @@unique([organizationId, telegramUserId])
   @@unique([organizationId, userId])
@@ -274,6 +276,7 @@ model Pet {
   medicationNotes   String?
   vaccinationDueAt DateTime?
   primaryVeterinarianId String?
+  createdIdempotencyKey String?        @unique
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @default(now()) @updatedAt
   organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -285,6 +288,7 @@ model Pet {
   consultations    Consultation[]
   hospitalizations Hospitalization[]
   specimens        Specimen[]
+  files            PetFile[]
 
   @@index([organizationId, name])
 }
@@ -296,10 +300,37 @@ model OwnerPetRelation {
   petId          String
   relation       String
   primary        Boolean @default(false)
+  permissions    Json    @default("[\"VIEW\",\"BOOK\"]")
+  state          String  @default("ACTIVE")
+  createdAt      DateTime @default(now())
+  endedAt        DateTime?
   owner          Owner   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   pet            Pet     @relation(fields: [petId], references: [id], onDelete: Restrict)
 
   @@unique([organizationId, ownerId, petId])
+  @@index([organizationId, petId, state])
+}
+
+model PetFile {
+  id             String   @id @default(uuid())
+  organizationId String
+  ownerId        String?
+  petId          String
+  category       String
+  originalName   String
+  mimeType       String
+  sizeBytes      Int
+  contentHash    String
+  storageKey     String   @unique
+  state          String   @default("ACTIVE")
+  uploadedBy     String
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+  archivedAt     DateTime?
+  owner          Owner?   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet      @relation(fields: [petId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, petId, state, createdAt])
 }
 
 model Service {
@@ -530,6 +561,7 @@ model Consent {
   signedAt        DateTime
   revokedAt       DateTime?
   createdAt       DateTime           @default(now())
+  idempotencyKey  String?            @unique
   owner           Owner              @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   document        GeneratedDocument? @relation(fields: [documentId], references: [id], onDelete: Restrict)
 

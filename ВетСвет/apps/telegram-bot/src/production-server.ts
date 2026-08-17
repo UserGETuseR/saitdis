@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { buildBookingSlots, dateKeyInMoscow } from '../../api/src/booking-slots';
 import { advanceGroomingStage, canCompleteGrooming, createGroomingChecklist, normalizeGroomingChecklist, toggleGroomingChecklist } from '../../api/src/grooming-workflow';
+import { handleCareRoutes } from './care-routes';
 
 type AuthMode = 'CLIENT' | 'STAFF';
 type TgUpdate = {
@@ -37,6 +38,7 @@ const clientRoot = resolve(root, 'apps', 'client-web');
 const staffRoot = resolve(root, 'apps', 'staff-web');
 const authRoot = resolve(root, 'apps', 'auth-web');
 const photoRoot = resolve(root, 'Photo');
+const uploadRoot = resolve(process.env.VETSVET_UPLOAD_ROOT?.trim() || join(root, 'storage', 'uploads'));
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const scrypt = promisify(scryptCallback);
 const sameSecret = (left: string, right: string) => {
@@ -51,9 +53,14 @@ const mime: Record<string, string> = {
 const staffRoles = new Set(['ADMIN', 'MANAGER', 'VETERINARIAN', 'GROOMER', 'ASSISTANT', 'RECEPTIONIST']);
 const loginPattern = /^[a-z0-9][a-z0-9_.-]{2,31}$/;
 
-async function body(request: IncomingMessage): Promise<string> {
+async function body(request: IncomingMessage, maxBytes = 1_000_000): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const part of request) chunks.push(Buffer.isBuffer(part) ? part : Buffer.from(part));
+  let total = 0;
+  for await (const part of request) {
+    const chunk = Buffer.isBuffer(part) ? part : Buffer.from(part); total += chunk.length;
+    if (total > maxBytes) throw new Error('PAYLOAD_TOO_LARGE');
+    chunks.push(chunk);
+  }
   return Buffer.concat(chunks).toString('utf8');
 }
 function json(response: ServerResponse, status: number, payload: unknown) {
@@ -769,6 +776,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/auth/password/set') { await setPassword(request, response); return; }
     if (request.method === 'POST' && url.pathname === '/api/auth/telegram/start') { await startTelegramLogin(request, response); return; }
     if (request.method === 'POST' && url.pathname === '/api/v1/auth/telegram/link/start') { await startTelegramLink(request, response); return; }
+    if (await handleCareRoutes({ request, response, url, db, organizationId: config.organizationId, uploadRoot, currentStaff, body, json, idempotencyKey, audit: auditCommand })) return;
     if (request.method === 'GET' && url.pathname === '/api/auth/telegram/status') {
       const id = url.searchParams.get('requestId') ?? '';
       const record = await db.telegramLoginRequest.findUnique({ where: { id } });
@@ -1075,7 +1083,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/care-directory') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
-      const owners = await db.owner.findMany({ where: { organizationId: config.organizationId, accountStatus: { not: 'BLOCKED' } }, include: { relations: { include: { pet: true } } }, orderBy: { updatedAt: 'desc' }, take: 250 });
+      const owners = await db.owner.findMany({ where: { organizationId: config.organizationId, accountStatus: { not: 'BLOCKED' } }, include: { consents: { orderBy: { createdAt: 'desc' }, take: 100 }, relations: { where: { state: 'ACTIVE' }, include: { pet: { include: { files: { where: { state: 'ACTIVE' }, orderBy: { createdAt: 'desc' }, take: 30 } } } } } }, orderBy: { updatedAt: 'desc' }, take: 250 });
       const petIds = owners.flatMap((owner) => owner.relations.map((relation) => relation.petId));
       const [appointments, profiles, recipes, groomingVisits, clinicalCases, carePlans] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { startsAt: 'desc' }, take: 1500 }),
@@ -1087,7 +1095,7 @@ const server = createServer(async (request, response) => {
       ]);
       const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }); const variantById = new Map(variants.map((item) => [item.id, item]));
       const now = new Date(); const profileByPet = new Map(profiles.map((item) => [item.petId, item])); const recipeByPet = new Map(recipes.map((item) => [item.petId, item]));
-      const rows = owners.map((owner) => ({ id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email, preferredChannel: owner.preferredChannel, tags: owner.tags, pets: owner.relations.map((relation) => { const pet = relation.pet; const petAppointments = appointments.filter((item) => item.petId === pet.id); const profile = profileByPet.get(pet.id); const recipe = recipeByPet.get(pet.id); const visits = groomingVisits.filter((item) => item.petId === pet.id); const cases = clinicalCases.filter((item) => item.petId === pet.id); const plans = carePlans.filter((item) => item.petId === pet.id); const next = petAppointments.filter((item) => item.startsAt >= now && !['CANCELLED', 'COMPLETED'].includes(item.state)).sort((a, b) => a.startsAt.valueOf() - b.startsAt.valueOf())[0]; const last = petAppointments.filter((item) => item.startsAt < now && item.state === 'COMPLETED')[0]; return { id: pet.id, name: pet.name, species: pet.species, breed: pet.breed, sex: pet.sex, birthDate: pet.birthDate, lifecycle: pet.lifecycle, medicalAlerts: pet.medicalAlerts, chronicConditions: pet.chronicConditions, behavioralAlerts: pet.behavioralAlerts, vaccinationDueAt: pet.vaccinationDueAt, grooming: profile ? { coatType: profile.coatType, sensitivities: profile.sensitivities, behaviorNotes: profile.behaviorNotes, preferredStyle: profile.preferredStyle, recipe: recipe ? { id: recipe.id, title: recipe.title, steps: recipe.steps } : undefined, lastReport: visits.find((item) => item.state === 'COMPLETE')?.report, lastCompletedAt: visits.find((item) => item.state === 'COMPLETE')?.completedAt } : undefined, nextAppointment: next ? { id: next.id, state: next.state, startsAt: next.startsAt, service: variantById.get(next.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(next.variantId)?.service.kind ?? 'OTHER' } : undefined, lastAppointment: last ? { id: last.id, startsAt: last.startsAt, service: variantById.get(last.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(last.variantId)?.service.kind ?? 'OTHER' } : undefined, clinical: cases.flatMap((item) => item.encounters.map((encounter) => ({ reason: item.reason, assessment: encounter.assessment, plan: encounter.plan, occurredAt: encounter.finalizedAt ?? item.openedAt }))).slice(0, 5), careTasks: plans.flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, category: task.category, dueAt: task.dueAt, state: task.state }))).slice(0, 10) }; }) }));
+      const rows = owners.map((owner) => ({ id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email, preferredChannel: owner.preferredChannel, address: owner.address, emergencyContact: owner.emergencyContact, marketingConsent: owner.marketingConsent, accountStatus: owner.accountStatus, tags: owner.tags, notes: owner.notes, consents: owner.consents.map((item) => ({ id: item.id, petId: item.petId, purpose: item.purpose, documentVersion: item.documentVersion, state: item.state, signerName: item.signerName, signedAt: item.signedAt, revokedAt: item.revokedAt })), pets: owner.relations.map((relation) => { const pet = relation.pet; const petAppointments = appointments.filter((item) => item.petId === pet.id); const profile = profileByPet.get(pet.id); const recipe = recipeByPet.get(pet.id); const visits = groomingVisits.filter((item) => item.petId === pet.id); const cases = clinicalCases.filter((item) => item.petId === pet.id); const plans = carePlans.filter((item) => item.petId === pet.id); const next = petAppointments.filter((item) => item.startsAt >= now && !['CANCELLED', 'COMPLETED'].includes(item.state)).sort((a, b) => a.startsAt.valueOf() - b.startsAt.valueOf())[0]; const last = petAppointments.filter((item) => item.startsAt < now && item.state === 'COMPLETED')[0]; return { id: pet.id, name: pet.name, species: pet.species, breed: pet.breed, sex: pet.sex, neuterState: pet.neuterState, birthDate: pet.birthDate, color: pet.color, microchip: pet.microchip, passportId: pet.passportId, lifecycle: pet.lifecycle, medicalAlerts: pet.medicalAlerts, chronicConditions: pet.chronicConditions, behavioralAlerts: pet.behavioralAlerts, feedingNotes: pet.feedingNotes, medicationNotes: pet.medicationNotes, vaccinationDueAt: pet.vaccinationDueAt, relation: { id: relation.id, relation: relation.relation, primary: relation.primary, permissions: relation.permissions }, caregivers: owners.flatMap((candidate) => candidate.relations.filter((item) => item.petId === pet.id).map((item) => ({ relationId: item.id, ownerId: candidate.id, fullName: candidate.fullName, phone: candidate.phone, relation: item.relation, primary: item.primary, permissions: item.permissions }))), files: pet.files.map((file) => ({ id: file.id, category: file.category, originalName: file.originalName, mimeType: file.mimeType, sizeBytes: file.sizeBytes, createdAt: file.createdAt })), grooming: profile ? { coatType: profile.coatType, sensitivities: profile.sensitivities, behaviorNotes: profile.behaviorNotes, preferredStyle: profile.preferredStyle, recipe: recipe ? { id: recipe.id, title: recipe.title, steps: recipe.steps } : undefined, lastReport: visits.find((item) => item.state === 'COMPLETE')?.report, lastCompletedAt: visits.find((item) => item.state === 'COMPLETE')?.completedAt } : undefined, nextAppointment: next ? { id: next.id, state: next.state, startsAt: next.startsAt, service: variantById.get(next.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(next.variantId)?.service.kind ?? 'OTHER' } : undefined, lastAppointment: last ? { id: last.id, startsAt: last.startsAt, service: variantById.get(last.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(last.variantId)?.service.kind ?? 'OTHER' } : undefined, clinical: cases.flatMap((item) => item.encounters.map((encounter) => ({ reason: item.reason, assessment: encounter.assessment, plan: encounter.plan, occurredAt: encounter.finalizedAt ?? item.openedAt }))).slice(0, 5), careTasks: plans.flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, category: task.category, dueAt: task.dueAt, state: task.state }))).slice(0, 10) }; }) }));
       json(response, 200, { owners: rows, summary: { owners: rows.length, pets: rows.reduce((sum, owner) => sum + owner.pets.length, 0), groomingProfiles: profiles.length, upcoming: appointments.filter((item) => item.startsAt >= now && !['CANCELLED', 'COMPLETED'].includes(item.state)).length } }); return;
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/finance/dashboard') {
