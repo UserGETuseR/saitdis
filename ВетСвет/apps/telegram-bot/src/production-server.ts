@@ -152,8 +152,11 @@ async function auditCommand(input: { actorId: string; action: string; aggregateT
   ]);
 }
 
-async function ensureBookingReminders(appointmentId: string, ownerId: string, startsAt: Date) {
-  const plan = reminderPlan(startsAt);
+async function ensureBookingReminders(appointmentId: string, ownerId: string, startsAt: Date, serviceKind?: string) {
+  const plan = [
+    ...reminderPlan(startsAt),
+    ...(serviceKind === 'GROOMING' ? [{ kind: 'GROOMING_TEAM_FOLLOW_UP', scheduledAt: new Date(Date.now() + 15 * 60_000) }] : [])
+  ];
   await db.bookingReminder.updateMany({ where: { organizationId: config.organizationId, appointmentId, state: 'PENDING' }, data: { state: 'CANCELLED', cancelledAt: new Date() } });
   for (const item of plan) {
     await db.bookingReminder.upsert({
@@ -207,6 +210,16 @@ async function processBookingReminders() {
         const [appointment, owner] = await Promise.all([db.appointment.findFirst({ where: { id: reminder.appointmentId, organizationId: config.organizationId } }), db.owner.findFirst({ where: { id: reminder.ownerId, organizationId: config.organizationId } })]);
         if (!appointment || !owner || !['REQUESTED', 'CONFIRMED'].includes(appointment.state) || appointment.startsAt <= new Date()) { await db.bookingReminder.update({ where: { id: reminder.id }, data: { state: 'CANCELLED', cancelledAt: new Date() } }); continue; }
         const [pet, variant, conversation] = await Promise.all([db.pet.findFirst({ where: { id: appointment.petId, organizationId: config.organizationId } }), db.serviceVariant.findFirst({ where: { id: appointment.variantId, organizationId: config.organizationId }, include: { service: true } }), owner.telegramUserId ? db.telegramConversation.findUnique({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId: owner.telegramUserId } } }) : Promise.resolve(null)]);
+        if (reminder.kind === 'GROOMING_TEAM_FOLLOW_UP') {
+          if (appointment.state !== 'REQUESTED' || variant?.service.kind !== 'GROOMING') { await db.bookingReminder.update({ where: { id: reminder.id }, data: { state: 'CANCELLED', cancelledAt: new Date() } }); continue; }
+          const admins = await adminChats();
+          if (!admins.length) throw new Error('GROOMING_ADMIN_CHAT_NOT_CONFIGURED');
+          const teamText = `Запись на груминг всё ещё ждёт подтверждения\n\n${owner.fullName} · ${pet?.name ?? 'питомец'}\n${variant.name}\n${appointment.startsAt.toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Moscow' })}\n\nОткройте очередь записи VetSvet и назначьте мастера.`;
+          const adminDeliveries = await Promise.allSettled(admins.map((admin) => say(admin.chatId, teamText, [[{ text: 'Открыть рабочее место', url: `${config.publicUrl}/staff/#booking` }]])));
+          if (!adminDeliveries.some((delivery) => delivery.status === 'fulfilled')) throw new Error('GROOMING_TEAM_FOLLOW_UP_DELIVERY_FAILED');
+          await db.$transaction([db.bookingReminder.update({ where: { id: reminder.id }, data: { state: 'SENT', sentAt: new Date(), attempts: { increment: 1 }, lastError: null } }), db.communicationLog.create({ data: { organizationId: config.organizationId, ownerId: owner.id, petId: appointment.petId, channel: 'TELEGRAM', direction: 'OUTBOUND', kind: 'GROOMING_TEAM_FOLLOW_UP', subject: 'Повторное уведомление команде', body: teamText, state: 'SENT', idempotencyKey: `booking-reminder:${reminder.id}` } })]);
+          continue;
+        }
         const text = `${reminder.kind === 'DAY_BEFORE' ? 'Напоминаем о завтрашнем визите' : 'До визита осталось около двух часов'}: ${pet?.name ?? 'питомец'} · ${variant?.service.publicName ?? 'VetSvet'} · ${appointment.startsAt.toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Moscow' })}.`;
         if (conversation) await say(conversation.chatId, text, [[{ text: 'Мои записи', url: `${config.publicUrl}/client/` }]]);
         await db.$transaction([db.bookingReminder.update({ where: { id: reminder.id }, data: { state: 'SENT', sentAt: new Date(), attempts: { increment: 1 }, lastError: null } }), db.communicationLog.create({ data: { organizationId: config.organizationId, ownerId: owner.id, petId: appointment.petId, channel: conversation ? 'TELEGRAM' : 'IN_APP', direction: 'OUTBOUND', kind: 'APPOINTMENT_REMINDER', subject: 'Напоминание о визите', body: text, state: conversation ? 'SENT' : 'LOGGED', idempotencyKey: `booking-reminder:${reminder.id}` } })]);
@@ -269,6 +282,9 @@ async function ensureBookingFoundation() {
   const defaults = [
     { internalName: 'VET_INITIAL', publicName: 'Первичный приём ветеринара', kind: 'VETERINARY', variant: 'Осмотр и план заботы', durationMinutes: 40 },
     { internalName: 'GROOMING_REQUEST', publicName: 'Груминг', kind: 'GROOMING', variant: 'Подобрать уход для питомца', durationMinutes: 90 },
+    { internalName: 'GROOMING_REQUEST', publicName: 'Груминг', kind: 'GROOMING', variant: 'Бережное знакомство', durationMinutes: 60 },
+    { internalName: 'GROOMING_REQUEST', publicName: 'Груминг', kind: 'GROOMING', variant: 'Полный рецепт ухода', durationMinutes: 120 },
+    { internalName: 'GROOMING_REQUEST', publicName: 'Груминг', kind: 'GROOMING', variant: 'Поддерживающий уход', durationMinutes: 75 },
     { internalName: 'REMOTE_CONSULTATION', publicName: 'Консультация', kind: 'CONSULTATION', variant: 'Онлайн-консультация специалиста', durationMinutes: 30 }
   ];
   for (const item of defaults) {
@@ -377,6 +393,29 @@ async function adminFor(chatId: string, telegramUserId: string) {
 async function adminChats() {
   const records = await db.telegramAdminChat.findMany({ orderBy: { createdAt: 'asc' } });
   return [...new Map(records.map((record) => [record.chatId, record])).values()];
+}
+
+async function notifyGroomingRequested(input: { appointmentId: string; ownerId: string; petId: string; variantId: string; startsAt: Date }) {
+  const [owner, pet, variant, admins] = await Promise.all([
+    db.owner.findFirst({ where: { id: input.ownerId, organizationId: config.organizationId } }),
+    db.pet.findFirst({ where: { id: input.petId, organizationId: config.organizationId } }),
+    db.serviceVariant.findFirst({ where: { id: input.variantId, organizationId: config.organizationId }, include: { service: true } }),
+    adminChats()
+  ]);
+  if (!owner || !pet || variant?.service.kind !== 'GROOMING') return;
+  const when = input.startsAt.toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Moscow' });
+  const ownerText = `Запись на груминг сохранена ✦\n\n${pet.name} · ${variant.name}\n${when}\n\nКоманда проверит заявку и подтвердит мастера. Статус уже доступен в личном кабинете, а перед визитом мы напомним ещё раз.`;
+  const teamText = `Новая запись на груминг с сайта\n\n${owner.fullName} · ${pet.name}\n${variant.name}\n${when}\n\nЗаявка ждёт подтверждения и назначения мастера.`;
+  const conversation = owner.telegramUserId ? await db.telegramConversation.findUnique({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId: owner.telegramUserId } } }) : null;
+  const [ownerDelivery, teamDeliveries] = await Promise.all([
+    conversation ? say(conversation.chatId, ownerText, [[{ text: 'Открыть запись', url: `${config.publicUrl}/client/` }]]).then(() => true).catch(() => false) : Promise.resolve(false),
+    Promise.allSettled(admins.map((admin) => say(admin.chatId, teamText, [[{ text: 'Открыть очередь', url: `${config.publicUrl}/staff/#booking` }]])))
+  ]);
+  const teamDelivered = teamDeliveries.some((delivery) => delivery.status === 'fulfilled');
+  await db.communicationLog.createMany({ data: [
+    { organizationId: config.organizationId, ownerId: owner.id, petId: pet.id, channel: conversation ? 'TELEGRAM' : 'IN_APP', direction: 'OUTBOUND', kind: 'GROOMING_BOOKING_CREATED', subject: 'Запись на груминг сохранена', body: ownerText, state: ownerDelivery ? 'SENT' : conversation ? 'FAILED' : 'LOGGED', idempotencyKey: `grooming-created:${input.appointmentId}:owner` },
+    { organizationId: config.organizationId, ownerId: owner.id, petId: pet.id, channel: admins.length ? 'TELEGRAM' : 'IN_APP', direction: 'OUTBOUND', kind: 'GROOMING_BOOKING_TEAM', subject: 'Новая запись на груминг', body: teamText, state: teamDelivered ? 'SENT' : admins.length ? 'FAILED' : 'LOGGED', idempotencyKey: `grooming-created:${input.appointmentId}:team` }
+  ], skipDuplicates: true });
 }
 function parseInvite(value: unknown) {
   const [id, token, extra] = String(value ?? '').split('.');
@@ -488,7 +527,7 @@ async function createBotBooking(telegramUserId: string, chatId: string, values: 
     if (template) { const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` }); await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Согласие VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.user.id } }); }
     return { appointment, invoice, pet: relation.pet, variant };
   });
-  await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt);
+  await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt, result.variant.service.kind);
   await auditCommand({ actorId: account.user.id, action: 'appointment.requested_via_telegram', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: commandKey, payload: { petId: result.pet.id, variantId: result.variant.id } });
   await db.telegramConversation.update({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, data: { state: 'DONE', data: {}, expiresAt: new Date() } });
   return result;
@@ -896,6 +935,19 @@ const server = createServer(async (request, response) => {
   try {
     if (!allowRequest(request, url.pathname)) { response.setHeader('retry-after', '60'); json(response, 429, { error: 'RATE_LIMITED', requestId }); return; }
     if (request.method === 'GET' && url.pathname === '/healthz') { await db.$queryRawUnsafe('SELECT 1'); json(response, 200, { status: 'ok' }); return; }
+    if (request.method === 'GET' && url.pathname === '/api/v1/public/grooming/catalog') {
+      const [locations, variants] = await Promise.all([
+        db.location.findMany({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } }),
+        db.serviceVariant.findMany({ where: { organizationId: config.organizationId, service: { onlineBookable: true, kind: 'GROOMING' } }, include: { service: true }, orderBy: [{ durationMinutes: 'asc' }, { name: 'asc' }] })
+      ]);
+      json(response, 200, { locations: locations.map((location) => ({ id: location.id, name: location.name })), variants: variants.map((variant) => ({ id: variant.id, name: variant.name, durationMinutes: variant.durationMinutes, priceMinor: variant.priceMinor, currency: variant.currency, allowedSpecies: variant.allowedSpecies })) }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/public/grooming/availability') {
+      const variantId = String(url.searchParams.get('variantId') ?? ''); const locationId = String(url.searchParams.get('locationId') ?? ''); const date = String(url.searchParams.get('date') ?? '');
+      const availability = await bookingAvailability(variantId, locationId, date);
+      if (!availability || availability.variant.service.kind !== 'GROOMING') { json(response, 400, { error: 'INVALID_GROOMING_AVAILABILITY' }); return; }
+      json(response, 200, { date, timezone: availability.location.timezone, slots: availability.slots }); return;
+    }
     if (request.method === 'POST' && url.pathname === '/telegram/webhook') {
       if (request.headers['x-telegram-bot-api-secret-token'] !== config.webhookSecret) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       await handleUpdate(JSON.parse(await body(request)) as TgUpdate); json(response, 200, { ok: true }); return;
@@ -1167,9 +1219,10 @@ const server = createServer(async (request, response) => {
       if (!result) {
         json(response, 409, { error: bookingFailure === 'BOOKING_SLOT_CHANGED' ? 'BOOKING_SLOT_UNAVAILABLE' : bookingFailure === 'DUPLICATE_APPOINTMENT_CHANGED' ? 'DUPLICATE_APPOINTMENT_REQUEST' : bookingFailure === 'BOOKING_HOLD_CHANGED' ? 'BOOKING_HOLD_EXPIRED' : 'PACKAGE_CREDIT_CHANGED_RETRY' }); return;
       }
-      await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt);
+      await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt, variant.service.kind);
       if (hold) await db.bookingWaitlistEntry.updateMany({ where: { organizationId: config.organizationId, offeredHoldId: hold.id, state: 'OFFERED' }, data: { state: 'BOOKED', bookedAt: new Date() } });
       await auditCommand({ actorId: account.current.userId, action: 'appointment.requested', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { petId: relation.petId, variantId: variant.id, packageBalanceId: packageBalance?.id } });
+      if (variant.service.kind === 'GROOMING') await notifyGroomingRequested({ appointmentId: result.appointment.id, ownerId: result.appointment.ownerId, petId: relation.petId, variantId: variant.id, startsAt: result.appointment.startsAt }).catch((error) => console.error('Grooming booking notification failed.', error));
       json(response, 201, { appointment: { id: result.appointment.id, state: result.appointment.state, startsAt: result.appointment.startsAt, endsAt: result.appointment.endsAt }, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor, currency: result.invoice.currency } }); return;
     }
     const clientAppointmentManage = url.pathname.match(/^\/api\/v1\/client\/appointments\/([^/]+)$/);
@@ -2238,6 +2291,8 @@ const server = createServer(async (request, response) => {
       await serve(response, authRoot, 'password.html'); return;
     }
     if (request.method === 'GET' && url.pathname.startsWith('/Photo/')) { await serve(response, photoRoot, decodeURIComponent(url.pathname.slice(7))); return; }
+    if (request.method === 'GET' && (url.pathname === '/grooming' || url.pathname === '/grooming/')) { await serve(response, publicRoot, 'grooming/index.html'); return; }
+    if (request.method === 'GET' && url.pathname.startsWith('/grooming/')) { await serve(response, publicRoot, decodeURIComponent(url.pathname.slice(1))); return; }
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) { await serve(response, publicRoot, 'index.html'); return; }
     json(response, 404, { error: 'NOT_FOUND' });
   } catch (error) { console.error(error); json(response, 500, { error: 'INTERNAL_ERROR' }); }
