@@ -333,6 +333,42 @@ model PetFile {
   @@index([organizationId, petId, state, createdAt])
 }
 
+model PetMemoryNode {
+  id             String    @id @default(uuid())
+  organizationId String
+  petId          String
+  type           String
+  title          String
+  summary        String
+  severity       String    @default("INFO")
+  sourceType     String
+  sourceId       String
+  facts          Json      @default("{}")
+  occurredAt     DateTime
+  verifiedBy     String?
+  verifiedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, sourceType, sourceId, type])
+  @@index([organizationId, petId, occurredAt])
+  @@index([organizationId, petId, type, severity])
+}
+
+model PetMemoryEdge {
+  id             String   @id @default(uuid())
+  organizationId String
+  petId          String
+  fromNodeId     String
+  toNodeId       String
+  relation       String
+  explanation    String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, fromNodeId, toNodeId, relation])
+  @@index([organizationId, petId, createdAt])
+}
+
 model Service {
   id             String           @id @default(uuid())
   organizationId String
@@ -388,6 +424,22 @@ model Appointment {
 
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
+}
+
+model AppointmentStatusEvent {
+  id             String   @id @default(uuid())
+  organizationId String
+  appointmentId  String
+  petId          String
+  stage          String
+  message        String
+  visibleToOwner Boolean  @default(true)
+  createdBy      String
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, appointmentId, createdAt])
+  @@index([organizationId, petId, createdAt])
 }
 
 model BookingHold {
@@ -614,6 +666,9 @@ model Prescription {
   instructions   String
   state          String
   prescriberId   String
+  startsAt       DateTime  @default(now())
+  endsAt         DateTime?
+  reactions      Json      @default("[]")
   encounter      Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, encounterId])
@@ -671,16 +726,44 @@ model CarePlanTask {
   @@index([organizationId, dueAt, state])
 }
 
+model CareRecommendation {
+  id              String    @id @default(uuid())
+  organizationId  String
+  ownerId         String
+  petId           String
+  triggerNodeId   String?
+  kind            String
+  title           String
+  explanation     String
+  expectedOutcome String
+  priority        String    @default("NORMAL")
+  state           String    @default("PROPOSED")
+  assignedRole    String?
+  dueAt           DateTime?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  completedBy     String?
+  completedAt     DateTime?
+  resolution      String?
+  idempotencyKey  String    @unique
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([organizationId, petId, state, dueAt])
+  @@index([organizationId, ownerId, state, priority])
+}
+
 model GroomingProfile {
-  id             String   @id @default(uuid())
-  organizationId String
-  petId          String
-  coatType       String?
-  sensitivities  String?
-  behaviorNotes  String?
-  preferredStyle String?
-  updatedAt      DateTime @updatedAt
-  createdAt      DateTime @default(now())
+  id                  String   @id @default(uuid())
+  organizationId      String
+  petId               String
+  coatType            String?
+  sensitivities       String?
+  behaviorNotes       String?
+  preferredStyle      String?
+  medicalRestrictions Json     @default("[]")
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
 
   @@unique([organizationId, petId])
   @@index([organizationId, petId])
@@ -724,16 +807,43 @@ model GroomingVisit {
   @@index([organizationId, petId, state])
 }
 
+model GroomingObservation {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  appointmentId      String
+  groomingVisitId    String
+  petId              String
+  category           String
+  note               String
+  severity           String    @default("LOW")
+  state              String    @default("NEW")
+  observedBy         String
+  reviewedBy         String?
+  reviewedAt         DateTime?
+  linkedMemoryNodeId String?
+  idempotencyKey     String    @unique
+  createdAt          DateTime  @default(now())
+
+  @@index([organizationId, petId, state, createdAt])
+  @@index([organizationId, appointmentId, createdAt])
+}
+
 model PassportShare {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   ownerId        String
   petId          String
-  token          String   @unique
+  token          String    @unique
   scope          String
   state          String
   expiresAt      DateTime
-  createdAt      DateTime @default(now())
+  label          String?
+  accessCount    Int       @default(0)
+  lastAccessedAt DateTime?
+  revokedAt      DateTime?
+  createdBy      String?
+  idempotencyKey String?   @unique
+  createdAt      DateTime  @default(now())
 
   @@index([organizationId, petId, state])
 }

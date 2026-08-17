@@ -8,6 +8,7 @@ import { buildBookingSlots, dateKeyInMoscow } from '../../api/src/booking-slots'
 import { bookingHoldExpiresAt, canCancelBooking, canMarkNoShow, canRescheduleBooking, reminderPlan, waitlistPeriodMatches, WAITLIST_OFFER_MINUTES } from '../../api/src/booking-lifecycle';
 import { advanceGroomingStage, canCompleteGrooming, createGroomingChecklist, normalizeGroomingChecklist, toggleGroomingChecklist } from '../../api/src/grooming-workflow';
 import { handleCareRoutes } from './care-routes';
+import { handlePetIntelligenceRoutes, linkPetMemories, recordAppointmentStage, refreshPetIntelligence, rememberPetEvent } from './pet-intelligence-routes';
 
 type AuthMode = 'CLIENT' | 'STAFF';
 type TgUpdate = {
@@ -877,6 +878,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/auth/telegram/start') { await startTelegramLogin(request, response); return; }
     if (request.method === 'POST' && url.pathname === '/api/v1/auth/telegram/link/start') { await startTelegramLink(request, response); return; }
     if (await handleCareRoutes({ request, response, url, db, organizationId: config.organizationId, uploadRoot, currentStaff, body, json, idempotencyKey, audit: auditCommand })) return;
+    if (await handlePetIntelligenceRoutes({ request, response, url, db, organizationId: config.organizationId, publicUrl: config.publicUrl, currentStaff, currentOwner, body, json, idempotencyKey, audit: auditCommand })) return;
     if (request.method === 'GET' && url.pathname === '/api/auth/telegram/status') {
       const id = url.searchParams.get('requestId') ?? '';
       const record = await db.telegramLoginRequest.findUnique({ where: { id } });
@@ -1706,7 +1708,17 @@ const server = createServer(async (request, response) => {
         if (appointment.staffId !== account.current.userId && account.membership.role !== 'ADMIN') { json(response, 403, { error: 'ASSIGNED_STAFF_REQUIRED' }); return; }
         if (!transitions[action].includes(appointment.state)) { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
         const states: Record<string, string> = { CHECK_IN: 'CHECKED_IN', START: 'IN_SERVICE', READY: 'READY', COMPLETE: 'COMPLETED' };
-        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: states[action] } });
+        const journey: Record<string, { stage: string; message: string }> = {
+          CHECK_IN: { stage: 'ACCEPTED', message: 'Питомец принят командой VetSvet.' },
+          START: { stage: 'STARTED', message: 'Специалист начал работу. Всё важное фиксируется в карте.' },
+          READY: { stage: 'READY_FOR_PICKUP', message: 'Работа завершена — питомца можно забирать.' },
+          COMPLETE: { stage: 'NEXT_STEP', message: 'Визит завершён. Следующий шаг сохранён в плане заботы.' }
+        };
+        const updated = await db.$transaction(async (tx) => {
+          const item = await tx.appointment.update({ where: { id: appointment.id }, data: { state: states[action] } });
+          await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: journey[action].stage, message: journey[action].message, actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:${journey[action].stage}` });
+          return item;
+        });
         await auditCommand({ actorId: account.current.userId, action: `appointment.${states[action].toLowerCase()}`, aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key });
         json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
       }
@@ -1729,6 +1741,8 @@ const server = createServer(async (request, response) => {
       const result = await db.$transaction(async (tx) => {
         const completed = await tx.consultation.update({ where: { id: consultation.id }, data: { state: 'COMPLETED', response: answer, respondedAt: new Date() } });
         await tx.appointment.update({ where: { id: consultation.appointmentId }, data: { state: 'READY' } });
+        await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'RECOMMENDATION', title: 'Ответ по консультации', summary: answer, sourceType: 'CONSULTATION', sourceId: consultation.id, facts: { question: consultation.question }, occurredAt: new Date(), verifiedBy: account.current.userId });
+        await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: 'RECOMMENDATIONS_READY', message: 'Специалист подготовил ответ и рекомендации.', actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:RECOMMENDATIONS_READY` });
         return completed;
       });
       await auditCommand({ actorId: account.current.userId, action: 'consultation.completed', aggregateType: 'Consultation', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: result.appointmentId } });
@@ -1740,7 +1754,7 @@ const server = createServer(async (request, response) => {
       if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       if (!['ADMIN', 'VETERINARIAN'].includes(account.membership.role)) { json(response, 403, { error: 'CLINICAL_ROLE_REQUIRED' }); return; }
       if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
-      let input: { appointmentId?: string; reason?: string; subjective?: string; objective?: string; assessment?: string; plan?: string; prescriptions?: { medicationName?: string; instructions?: string }[]; followUpAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      let input: { appointmentId?: string; reason?: string; subjective?: string; objective?: string; assessment?: string; plan?: string; prescriptions?: { medicationName?: string; instructions?: string; durationDays?: number; reactions?: string[] }[]; followUpAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
       const appointment = await db.appointment.findFirst({ where: { id: String(input.appointmentId ?? ''), organizationId: config.organizationId } });
       if (!appointment || appointment.state !== 'IN_SERVICE') { json(response, 409, { error: 'CLINICAL_VISIT_NOT_READY' }); return; }
       if (appointment.staffId !== account.current.userId && account.membership.role !== 'ADMIN') { json(response, 403, { error: 'ASSIGNED_STAFF_REQUIRED' }); return; }
@@ -1750,18 +1764,32 @@ const server = createServer(async (request, response) => {
       const clean = (value: unknown, limit = 4000) => String(value ?? '').trim().slice(0, limit);
       const reason = clean(input.reason, 500); const subjective = clean(input.subjective); const objective = clean(input.objective); const assessment = clean(input.assessment); const planText = clean(input.plan);
       if (reason.length < 3 || assessment.length < 10 || planText.length < 10) { json(response, 400, { error: 'CLINICAL_SUMMARY_REQUIRED' }); return; }
-      const prescriptions = Array.isArray(input.prescriptions) ? input.prescriptions.map((item) => ({ medicationName: clean(item.medicationName, 240), instructions: clean(item.instructions, 1000) })).filter((item) => item.medicationName && item.instructions).slice(0, 20) : [];
+      const prescriptions = Array.isArray(input.prescriptions) ? input.prescriptions.map((item) => ({ medicationName: clean(item.medicationName, 240), instructions: clean(item.instructions, 1000), durationDays: Math.max(0, Math.min(365, Math.trunc(Number(item.durationDays ?? 0)))), reactions: Array.isArray(item.reactions) ? item.reactions.map((reaction) => clean(reaction, 300)).filter(Boolean).slice(0, 20) : [] })).filter((item) => item.medicationName && item.instructions).slice(0, 20) : [];
       const followUpAt = input.followUpAt ? new Date(input.followUpAt) : undefined;
       const existingCase = await db.clinicalCase.findFirst({ where: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, status: 'OPEN' }, orderBy: { openedAt: 'desc' }, include: { encounters: { orderBy: { version: 'desc' }, take: 1 } } });
       const result = await db.$transaction(async (tx) => {
         const clinicalCase = existingCase ?? await tx.clinicalCase.create({ data: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, status: 'OPEN', reason } });
         const version = (existingCase?.encounters[0]?.version ?? 0) + 1;
-        const encounter = await tx.encounter.create({ data: { organizationId: config.organizationId, caseId: clinicalCase.id, appointmentId: appointment.id, petId: appointment.petId, version, state: 'FINALIZED', subjective: subjective || null, objective: objective || null, assessment, plan: planText, clinicianId: account.current.userId, finalizedAt: new Date(), prescriptions: { create: prescriptions.map((item) => ({ organizationId: config.organizationId, medicationName: item.medicationName, instructions: item.instructions, state: 'ACTIVE', prescriberId: account.current.userId })) } } });
+        const encounter = await tx.encounter.create({ data: { organizationId: config.organizationId, caseId: clinicalCase.id, appointmentId: appointment.id, petId: appointment.petId, version, state: 'FINALIZED', subjective: subjective || null, objective: objective || null, assessment, plan: planText, clinicianId: account.current.userId, finalizedAt: new Date(), prescriptions: { create: prescriptions.map((item) => ({ organizationId: config.organizationId, medicationName: item.medicationName, instructions: item.instructions, state: 'ACTIVE', prescriberId: account.current.userId, endsAt: item.durationDays ? new Date(Date.now() + item.durationDays * 86400000) : null, reactions: item.reactions })) } }, include: { prescriptions: true } });
         await tx.appointment.update({ where: { id: appointment.id }, data: { state: 'READY' } });
         if (followUpAt && !Number.isNaN(followUpAt.valueOf()) && followUpAt > new Date()) {
           const carePlan = await tx.carePlan.findFirst({ where: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, state: 'ACTIVE' }, orderBy: { createdAt: 'desc' } }) ?? await tx.carePlan.create({ data: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, title: 'План лечения и наблюдения', state: 'ACTIVE' } });
           await tx.carePlanTask.create({ data: { carePlanId: carePlan.id, organizationId: config.organizationId, title: 'Контрольный приём', category: 'CLINICAL_FOLLOW_UP', dueAt: followUpAt, state: 'OPEN' } });
         }
+        const assessmentNode = await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'ASSESSMENT', title: reason, summary: assessment, sourceType: 'ENCOUNTER', sourceId: encounter.id, facts: { objective }, occurredAt: encounter.finalizedAt ?? new Date(), verifiedBy: account.current.userId });
+        const planNode = await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'RECOMMENDATION', title: 'План после приёма', summary: planText, sourceType: 'ENCOUNTER', sourceId: encounter.id, facts: { followUpAt: followUpAt?.toISOString() }, occurredAt: encounter.finalizedAt ?? new Date(), verifiedBy: account.current.userId });
+        await linkPetMemories(tx, config.organizationId, { petId: appointment.petId, fromNodeId: assessmentNode.id, toNodeId: planNode.id, relation: 'LEADS_TO', explanation: 'Клиническая оценка врача объясняет следующий план действий.' });
+        if (subjective) {
+          const symptomNode = await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'SYMPTOM', title: 'Что заметил владелец', summary: subjective, sourceType: 'ENCOUNTER', sourceId: encounter.id, occurredAt: encounter.finalizedAt ?? new Date(), verifiedBy: account.current.userId });
+          await linkPetMemories(tx, config.organizationId, { petId: appointment.petId, fromNodeId: symptomNode.id, toNodeId: assessmentNode.id, relation: 'ASSESSED_AS', explanation: 'Врач сопоставил жалобы владельца с клинической оценкой.' });
+        }
+        for (const prescription of encounter.prescriptions) {
+          const medicationNode = await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'MEDICATION', title: prescription.medicationName, summary: prescription.instructions, sourceType: 'PRESCRIPTION', sourceId: prescription.id, facts: { startsAt: prescription.startsAt.toISOString(), endsAt: prescription.endsAt?.toISOString(), reactions: prescription.reactions }, occurredAt: prescription.startsAt, verifiedBy: account.current.userId });
+          await linkPetMemories(tx, config.organizationId, { petId: appointment.petId, fromNodeId: planNode.id, toNodeId: medicationNode.id, relation: 'INCLUDES', explanation: 'Назначение является частью проверенного плана лечения.' });
+        }
+        if (followUpAt && !Number.isNaN(followUpAt.valueOf()) && followUpAt > new Date()) await tx.careRecommendation.upsert({ where: { idempotencyKey: `clinical-follow-up:${encounter.id}` }, update: {}, create: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, triggerNodeId: planNode.id, kind: 'CLINICAL_FOLLOW_UP', title: 'Контрольный приём', explanation: `Врач указал контроль после визита ${reason}.`, expectedOutcome: 'Команда сверит самочувствие питомца и при необходимости скорректирует план.', priority: 'NORMAL', assignedRole: 'VETERINARIAN', dueAt: followUpAt, state: 'VERIFIED', reviewedBy: account.current.userId, reviewedAt: new Date(), idempotencyKey: `clinical-follow-up:${encounter.id}` } });
+        await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: 'RECOMMENDATIONS_READY', message: 'Врач завершил запись — рекомендации готовы в личном кабинете.', actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:RECOMMENDATIONS_READY` });
+        await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: 'READY_FOR_PICKUP', message: 'Приём завершён. Можно переходить к выдаче питомца.', actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:READY_FOR_PICKUP` });
         return encounter;
       });
       await auditCommand({ actorId: account.current.userId, action: 'clinical.encounter_finalized', aggregateType: 'Encounter', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: appointment.id, petId: appointment.petId } });
@@ -2037,14 +2065,19 @@ const server = createServer(async (request, response) => {
       if (existing) { json(response, 409, { error: 'GROOMING_VISIT_EXISTS' }); return; }
       const trim = (value: unknown, limit = 1000) => String(value ?? '').trim().slice(0, limit) || null;
       const steps = Array.isArray(input.recipeSteps) ? input.recipeSteps.map((step) => String(step).trim()).filter(Boolean).slice(0, 20) : [];
+      const petContext = await db.pet.findFirst({ where: { id: appointment.petId, organizationId: config.organizationId } });
+      const restrictionValues = (value: unknown) => Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : value && typeof value === 'object' ? Object.entries(value as Record<string, unknown>).map(([name, detail]) => `${name}: ${String(detail)}`) : [];
+      const medicalRestrictions = Array.from(new Set([...restrictionValues(petContext?.medicalAlerts), ...restrictionValues(petContext?.chronicConditions)]));
       const result = await db.$transaction(async (tx) => {
-        await tx.groomingProfile.upsert({ where: { organizationId_petId: { organizationId: config.organizationId, petId: appointment.petId } }, update: { coatType: trim(input.coatType, 180), sensitivities: trim(input.sensitivities), behaviorNotes: trim(input.behaviorNotes), preferredStyle: trim(input.preferredStyle, 240) }, create: { organizationId: config.organizationId, petId: appointment.petId, coatType: trim(input.coatType, 180), sensitivities: trim(input.sensitivities), behaviorNotes: trim(input.behaviorNotes), preferredStyle: trim(input.preferredStyle, 240) } });
+        await tx.groomingProfile.upsert({ where: { organizationId_petId: { organizationId: config.organizationId, petId: appointment.petId } }, update: { coatType: trim(input.coatType, 180), sensitivities: trim(input.sensitivities), behaviorNotes: trim(input.behaviorNotes), preferredStyle: trim(input.preferredStyle, 240), medicalRestrictions }, create: { organizationId: config.organizationId, petId: appointment.petId, coatType: trim(input.coatType, 180), sensitivities: trim(input.sensitivities), behaviorNotes: trim(input.behaviorNotes), preferredStyle: trim(input.preferredStyle, 240), medicalRestrictions } });
         if (steps.length) await tx.groomingRecipe.updateMany({ where: { organizationId: config.organizationId, petId: appointment.petId, isPreferred: true }, data: { isPreferred: false } });
         const recipe = steps.length ? await tx.groomingRecipe.create({ data: { organizationId: config.organizationId, petId: appointment.petId, title: trim(input.recipeTitle, 180) ?? 'Индивидуальный уход', steps, isPreferred: true } }) : await tx.groomingRecipe.findFirst({ where: { organizationId: config.organizationId, petId: appointment.petId, isPreferred: true }, orderBy: { createdAt: 'desc' } });
-        return tx.groomingVisit.create({ data: { organizationId: config.organizationId, appointmentId: appointment.id, petId: appointment.petId, recipeId: recipe?.id, state: 'IN_PROGRESS', currentStage: 'INTAKE', stageStartedAt: new Date(), stageLog: [], checklist: createGroomingChecklist() as Prisma.InputJsonValue, homeCare: [], beforeFileIds: [], afterFileIds: [], startedBy: account.current.userId } });
+        const created = await tx.groomingVisit.create({ data: { organizationId: config.organizationId, appointmentId: appointment.id, petId: appointment.petId, recipeId: recipe?.id, state: 'IN_PROGRESS', currentStage: 'INTAKE', stageStartedAt: new Date(), stageLog: [], checklist: createGroomingChecklist() as Prisma.InputJsonValue, homeCare: [], beforeFileIds: [], afterFileIds: [], startedBy: account.current.userId } });
+        await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: 'STARTED', message: 'Мастер начал уход с учётом карты питомца и медицинских ограничений.', actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:STARTED` });
+        return created;
       });
       await auditCommand({ actorId: account.current.userId, action: 'grooming_visit.started', aggregateType: 'GroomingVisit', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: appointment.id } });
-      json(response, 201, { visit: { id: result.id, state: result.state, appointmentId: result.appointmentId } }); return;
+      json(response, 201, { visit: { id: result.id, state: result.state, appointmentId: result.appointmentId, medicalRestrictions } }); return;
     }
     const groomingProgress = url.pathname.match(/^\/api\/v1\/staff\/grooming\/visits\/([^/]+)\/progress$/);
     if (request.method === 'PATCH' && groomingProgress) {
@@ -2130,6 +2163,12 @@ const server = createServer(async (request, response) => {
           const plan = await tx.carePlan.findFirst({ where: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, state: 'ACTIVE' }, orderBy: { createdAt: 'desc' } }) ?? await tx.carePlan.create({ data: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, title: 'План ухода', state: 'ACTIVE' } });
           await tx.carePlanTask.create({ data: { carePlanId: plan.id, organizationId: config.organizationId, title: 'Запланировать следующий уход', category: 'GROOMING_REBOOK', dueAt: nextCareAt, state: 'OPEN' } });
         }
+        const procedureNode = await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'PROCEDURE', title: 'Груминг и уход', summary: report, sourceType: 'GROOMING_VISIT', sourceId: completed.id, facts: { homeCare, nextCareAt: completed.nextCareAt?.toISOString() }, occurredAt: completed.completedAt ?? new Date(), verifiedBy: account.current.userId });
+        const recommendationNode = homeCare.length ? await rememberPetEvent(tx, config.organizationId, { petId: appointment.petId, type: 'RECOMMENDATION', title: 'Домашний уход после груминга', summary: homeCare.join(' · '), sourceType: 'GROOMING_VISIT', sourceId: completed.id, occurredAt: completed.completedAt ?? new Date(), verifiedBy: account.current.userId }) : undefined;
+        if (recommendationNode) await linkPetMemories(tx, config.organizationId, { petId: appointment.petId, fromNodeId: procedureNode.id, toNodeId: recommendationNode.id, relation: 'FOLLOWED_BY', explanation: 'Домашние рекомендации продолжают выполненный в студии уход.' });
+        if (completed.nextCareAt) await tx.careRecommendation.upsert({ where: { idempotencyKey: `grooming-rebook:${completed.id}` }, update: { dueAt: completed.nextCareAt }, create: { organizationId: config.organizationId, ownerId: appointment.ownerId, petId: appointment.petId, triggerNodeId: recommendationNode?.id ?? procedureNode.id, kind: 'GROOMING_REBOOK', title: 'Повторить удачный уход', explanation: 'Мастер сохранил следующий ориентир после завершённого визита.', expectedOutcome: 'Команда предложит окно и повторит рецепт с учётом реакции питомца и медицинских ограничений.', priority: 'NORMAL', assignedRole: 'GROOMER', dueAt: completed.nextCareAt, state: 'VERIFIED', reviewedBy: account.current.userId, reviewedAt: new Date(), idempotencyKey: `grooming-rebook:${completed.id}` } });
+        await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: 'RECOMMENDATIONS_READY', message: 'Отчёт мастера и домашний уход готовы.', actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:RECOMMENDATIONS_READY` });
+        await recordAppointmentStage(tx, config.organizationId, { appointmentId: appointment.id, petId: appointment.petId, stage: 'READY_FOR_PICKUP', message: 'Уход завершён спокойно — питомца можно забирать.', actorId: account.current.userId, idempotencyKey: `appointment-stage:${appointment.id}:READY_FOR_PICKUP` });
         return completed;
       });
       await auditCommand({ actorId: account.current.userId, action: 'grooming_visit.completed', aggregateType: 'GroomingVisit', aggregateId: result.id, idempotencyKey: key, payload: { appointmentId: appointment.id } });
@@ -2168,4 +2207,6 @@ ensureOrganization().then(ensureBookingFoundation).then(ensureDocumentFoundation
   ensureBotCommandMenu().catch((error) => console.error('Telegram menu setup failed.', error));
   backfillBookingReminders().then(processBookingReminders).catch((error) => console.error('Booking reminder pass failed.', error));
   setInterval(() => processBookingReminders().catch((error) => console.error('Booking reminder pass failed.', error)), 60_000).unref();
+  refreshPetIntelligence(db, config.organizationId).catch((error) => console.error('Care intelligence pass failed.', error));
+  setInterval(() => refreshPetIntelligence(db, config.organizationId).catch((error) => console.error('Care intelligence pass failed.', error)), 300_000).unref();
 })).catch((error) => { console.error(error); process.exit(1); });

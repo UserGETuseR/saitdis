@@ -11,6 +11,7 @@
     "test:worker": "tsx apps/worker/tests/outbox-worker.spec.ts",
     "test:booking": "tsx apps/api/tests/booking-slots.spec.ts",
     "test:booking-lifecycle": "tsx apps/api/tests/booking-lifecycle.spec.ts",
+    "test:pet-intelligence": "tsx apps/api/tests/pet-intelligence.spec.ts",
     "test:grooming": "tsx apps/api/tests/grooming-workflow.spec.ts",
     "test:production-channel": "tsx apps/telegram-bot/tests/production-channel.spec.ts"
   },

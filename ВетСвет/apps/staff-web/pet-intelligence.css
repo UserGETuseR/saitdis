@@ -1,0 +1,25 @@
+.intelligence-drawer{width:min(720px,100vw);background:linear-gradient(165deg,#f8fbf8,#eef6f0);box-shadow:-35px 0 120px #061f2055}
+.intelligence-loading{margin-top:24px;padding:24px;border:1px dashed #8aa69c;border-radius:18px;color:#577068;font-size:13px}
+.pet-intelligence-body{display:grid;gap:14px;margin-top:20px}
+.pet-intelligence-body>section{padding:19px;border:1px solid #d7e0da;border-radius:20px;background:#fff}
+.pet-intelligence-body section>header{display:flex;align-items:start;justify-content:space-between;gap:14px;margin-bottom:13px}
+.pet-intelligence-body section>header h3{margin:4px 0;font-size:22px;letter-spacing:-.045em}
+.pet-intelligence-body section>header>b{display:grid;place-items:center;min-width:38px;height:38px;border-radius:50%;background:#bdf7d2;color:#0a403f}
+.drawer-next>article{display:grid;gap:8px;margin-top:9px;padding:14px;border:1px solid #dbe4de;border-radius:15px;background:#f9fbf9}
+.drawer-next>article.important{border-color:#e2bd75;background:#fff9eb}
+.drawer-next article>span,.drawer-graph article span{color:#6f827b;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.drawer-next h4,.drawer-graph h4{margin:2px 0;font-size:15px}
+.drawer-next p,.drawer-graph p{margin:0;color:#61716c;font-size:11px;line-height:1.5}
+.drawer-next footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:9px;border-top:1px solid #dfe6e1;color:#6c7d77;font-size:10px}
+.drawer-next footer div{display:flex;gap:5px}.drawer-next button,.drawer-observations button{padding:7px 9px;border:1px solid #0b5553;border-radius:8px;background:#0b5553;color:#fff;font-size:9px;font-weight:800}
+.drawer-graph{background:#092f30!important;color:#fff;border-color:#164c4d!important;overflow:hidden}
+.drawer-graph .core-kicker{color:#aaf1c6}.drawer-graph>div{position:relative;display:grid}.drawer-graph>div:before{content:"";position:absolute;left:5px;top:10px;bottom:10px;width:1px;background:#6ab89455}
+.drawer-graph article{position:relative;display:grid;grid-template-columns:12px 1fr;gap:12px;padding:12px 0;animation:graph-in .45s both;animation-delay:calc(var(--graph-i) * 35ms)}
+.drawer-graph article>i{position:relative;z-index:1;width:11px;height:11px;margin-top:4px;border-radius:50%;background:#7ce6a7;box-shadow:0 0 0 5px #7ce6a71a}
+.drawer-graph article>i.alert{background:#ffb864}.drawer-graph article>i.watch{background:#f0dc72}.drawer-graph article span{color:#78aa9d}.drawer-graph article h4{color:#fff}.drawer-graph article p{color:#b7d0ca}
+.drawer-observations article{margin-top:9px;padding:13px;border-radius:13px;background:#f2f7f3}.drawer-observations article p{color:#5f706a;font-size:11px}.drawer-observations article>span{font-size:9px;color:#567a6c}.drawer-observations article>div{display:flex;gap:6px;margin-top:9px}
+.groom-medical-guard{display:grid;gap:8px;margin-top:14px;padding:16px;border:1px solid #d39c54;border-radius:17px;background:linear-gradient(135deg,#fff4de,#fffaf2);color:#392b1d}.groom-medical-guard>div{display:flex;gap:6px;flex-wrap:wrap}.groom-medical-guard span{padding:6px 9px;border-radius:99px;background:#f3cf98;font-size:10px;font-weight:800}.groom-medical-guard small{color:#745a3e;line-height:1.5}
+.groom-observation{display:grid;grid-template-columns:minmax(210px,1fr) 150px 170px minmax(230px,1.4fr) auto;gap:9px;align-items:end;margin-top:14px;padding:16px;border:1px solid #26716d;border-radius:18px;background:linear-gradient(135deg,#092f30,#0d4d4d);color:#fff}.groom-observation h4{margin:4px 0;font-size:17px}.groom-observation .core-kicker{color:#aaf1c6}.groom-observation select,.groom-observation textarea{width:100%;min-height:43px;padding:10px;border:1px solid #ffffff33;border-radius:10px;background:#ffffff12;color:#fff;font:inherit}.groom-observation option{color:#10211f}.groom-observation textarea{height:43px;resize:vertical}.groom-observation button{min-height:43px;padding:10px 14px;border:0;border-radius:10px;background:#bdf7d2;color:#0b3130;font-weight:850}
+@keyframes graph-in{from{opacity:0;transform:translateX(10px)}}
+@media(max-width:1100px){.groom-observation{grid-template-columns:1fr 1fr}.groom-observation>div,.groom-observation textarea{grid-column:1/-1}}
+@media(max-width:700px){.intelligence-drawer{width:100vw}.pet-intelligence-body>section{padding:14px}.groom-observation{grid-template-columns:1fr}.groom-observation>*{grid-column:auto!important}}
