@@ -62,7 +62,7 @@
       .scroll-cue::after { content: ""; height: 76px; width: 1px; background: linear-gradient(white, transparent); }
       .hero-stamp { position: absolute; z-index: 4; right: 5.2vw; top: 26%; display: grid; place-items: center; width: 126px; aspect-ratio: 1; border: 1px solid rgba(255,255,255,.34); border-radius: 50%; color: white; text-align: center; font-size: .67rem; line-height: 1.15; letter-spacing: .1em; text-transform: uppercase; transform: rotate(13deg); }
       .hero-stamp b { color: var(--mint); font-size: 1rem; }
-      .app-constellation { position: absolute; z-index: 4; right: clamp(1.5rem, 6vw, 7rem); bottom: 3.6rem; width: min(29vw, 390px); min-width: 350px; height: 330px; perspective: 1100px; pointer-events: none; }
+      .app-constellation { position: absolute; z-index: 4; right: clamp(1.5rem, 6vw, 7rem); top: clamp(10.5rem, 24vh, 15rem); bottom: auto; width: min(29vw, 390px); min-width: 350px; height: 330px; perspective: 1100px; pointer-events: none; }
       .app-plane { position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .22s ease-out; }
       .app-card { position: absolute; overflow: hidden; border: 1px solid rgba(255,255,255,.25); border-radius: 1.15rem; background: linear-gradient(135deg, rgba(255,255,255,.2), rgba(255,255,255,.055)); box-shadow: 0 24px 60px rgba(0,0,0,.32); backdrop-filter: blur(18px); }
       .app-card::after { content:""; position:absolute; inset:0; background:linear-gradient(115deg, transparent 25%, rgba(255,255,255,.28), transparent 50%); transform:translateX(-130%); animation: glint 6s ease-in-out infinite; }
@@ -197,7 +197,7 @@
       }
       /* Tablet, foldable and portrait layouts: one signal is stronger than a pile of windows. */
       @media (max-width: 1100px), (orientation: portrait) {
-        .app-constellation { right:clamp(.8rem,3vw,1.8rem); bottom:1.25rem; width:232px; min-width:0; height:176px; opacity:1; transform:none; }
+        .app-constellation { right:clamp(.8rem,3vw,1.8rem); top:clamp(12rem,32vh,19rem); bottom:auto; width:232px; min-width:0; height:176px; opacity:1; transform:none; }
         .app-mini,.app-pet-dot { display:none !important; }
         .app-summary { right:0; bottom:0; width:222px; padding:.9rem; transform:translateZ(28px) rotateY(-5deg) rotateX(2deg); }
         .app-summary b { margin:.38rem 0 .12rem; font-size:1.02rem; }.app-summary p { font-size:.68rem; }.app-bars { height:24px; margin-top:.62rem; }
@@ -218,7 +218,7 @@
         .hero-image { background-position: 64% center; }
         .hero-content { align-self:stretch; display:flex; flex-direction:column; justify-content:flex-end; padding-top:6.1rem; padding-bottom:5.5rem; }
         .hero-orbit { width: 280px; top: 19%; left: 69%; }
-        .app-constellation{right:.75rem;bottom:1rem;width:126px;height:68px;opacity:.8}.app-summary{width:126px;padding:.55rem .6rem;border-radius:.85rem;transform:none;background:rgba(3,25,27,.62)}.app-summary small{font-size:.45rem}.app-summary b{margin:.18rem 0 0;font-size:.7rem}.app-summary p,.app-bars{display:none}
+        .app-constellation{right:.75rem;top:auto;bottom:1rem;width:126px;height:68px;opacity:.8}.app-summary{width:126px;padding:.55rem .6rem;border-radius:.85rem;transform:none;background:rgba(3,25,27,.62)}.app-summary small{font-size:.45rem}.app-summary b{margin:.18rem 0 0;font-size:.7rem}.app-summary p,.app-bars{display:none}
         .eyebrow { margin-bottom: 1rem; font-size: .61rem; }
         h1 { font-size: clamp(3.65rem, 17vw, 5.5rem); }
         .hero-copy { max-width: 300px; font-size: 1rem; }
