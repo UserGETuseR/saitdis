@@ -5,6 +5,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { buildBookingSlots, dateKeyInMoscow } from '../../api/src/booking-slots';
+import { bookingHoldExpiresAt, canCancelBooking, canMarkNoShow, canRescheduleBooking, reminderPlan, waitlistPeriodMatches, WAITLIST_OFFER_MINUTES } from '../../api/src/booking-lifecycle';
 import { advanceGroomingStage, canCompleteGrooming, createGroomingChecklist, normalizeGroomingChecklist, toggleGroomingChecklist } from '../../api/src/grooming-workflow';
 import { handleCareRoutes } from './care-routes';
 
@@ -96,7 +97,7 @@ const bookingRoles = (kind: string) => kind === 'GROOMING'
     ? ['ADMIN', 'VETERINARIAN']
     : ['ADMIN', 'MANAGER', 'VETERINARIAN', 'GROOMER'];
 
-async function bookingAvailability(variantId: string, locationId: string, date: string) {
+async function bookingAvailability(variantId: string, locationId: string, date: string, excludeHoldId?: string) {
   const [variant, location] = await Promise.all([
     db.serviceVariant.findFirst({ where: { id: variantId, organizationId: config.organizationId, service: { onlineBookable: true } }, include: { service: true } }),
     db.location.findFirst({ where: { id: locationId, organizationId: config.organizationId, active: true } })
@@ -105,13 +106,20 @@ async function bookingAvailability(variantId: string, locationId: string, date: 
   const dayStart = new Date(`${date}T00:00:00+03:00`);
   const dayEnd = new Date(`${date}T23:59:59.999+03:00`);
   if (Number.isNaN(dayStart.valueOf()) || dayEnd < new Date(Date.now() - 86400000) || dayStart > new Date(Date.now() + 120 * 86400000)) return undefined;
-  const [staffCount, appointments] = await Promise.all([
+  await db.bookingHold.updateMany({ where: { organizationId: config.organizationId, state: 'ACTIVE', expiresAt: { lte: new Date() } }, data: { state: 'EXPIRED' } });
+  const [staffCount, appointments, holds] = await Promise.all([
     db.staffMembership.count({ where: { organizationId: config.organizationId, state: 'ACTIVE', role: { in: bookingRoles(variant.service.kind) } } }),
-    db.appointment.findMany({ where: { organizationId: config.organizationId, locationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } } })
+    db.appointment.findMany({ where: { organizationId: config.organizationId, locationId, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] }, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } } }),
+    db.bookingHold.findMany({ where: { organizationId: config.organizationId, locationId, state: 'ACTIVE', expiresAt: { gt: new Date() }, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart }, ...(excludeHoldId ? { id: { not: excludeHoldId } } : {}) } })
   ]);
   const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
   const kindByVariant = new Map(variants.map((item) => [item.id, item.service.kind]));
-  const busy = appointments.filter((item) => kindByVariant.get(item.variantId) === variant.service.kind).map((item) => ({ startsAt: item.startsAt, endsAt: item.endsAt }));
+  const holdVariants = holds.length ? await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: holds.map((item) => item.variantId) } }, include: { service: true } }) : [];
+  const holdKindByVariant = new Map(holdVariants.map((item) => [item.id, item.service.kind]));
+  const busy = [
+    ...appointments.filter((item) => kindByVariant.get(item.variantId) === variant.service.kind).map((item) => ({ startsAt: item.startsAt, endsAt: item.endsAt })),
+    ...holds.filter((item) => holdKindByVariant.get(item.variantId) === variant.service.kind).map((item) => ({ startsAt: item.startsAt, endsAt: item.endsAt }))
+  ];
   const capacity = Math.max(0, Math.min(location.bookingCapacity || 1, staffCount));
   return { variant, location, slots: buildBookingSlots({ date, durationMinutes: variant.durationMinutes, bufferBeforeMinutes: variant.bufferBeforeMinutes, bufferAfterMinutes: variant.bufferAfterMinutes, capacity, busy }) };
 }
@@ -126,6 +134,72 @@ async function auditCommand(input: { actorId: string; action: string; aggregateT
     db.auditEvent.create({ data: { organizationId: config.organizationId, actorId: input.actorId, action: input.action, aggregateType: input.aggregateType, aggregateId: input.aggregateId, correlationId: input.idempotencyKey, metadata: eventPayload } }),
     db.outboxEvent.create({ data: { organizationId: config.organizationId, eventName: input.action, aggregateType: input.aggregateType, aggregateId: input.aggregateId, idempotencyKey: input.idempotencyKey, payload: eventPayload, occurredAt } })
   ]);
+}
+
+async function ensureBookingReminders(appointmentId: string, ownerId: string, startsAt: Date) {
+  const plan = reminderPlan(startsAt);
+  await db.bookingReminder.updateMany({ where: { organizationId: config.organizationId, appointmentId, state: 'PENDING' }, data: { state: 'CANCELLED', cancelledAt: new Date() } });
+  for (const item of plan) {
+    await db.bookingReminder.upsert({
+      where: { appointmentId_kind: { appointmentId, kind: item.kind } },
+      update: { scheduledAt: item.scheduledAt, state: 'PENDING', attempts: 0, sentAt: null, cancelledAt: null, lastError: null },
+      create: { organizationId: config.organizationId, appointmentId, ownerId, kind: item.kind, scheduledAt: item.scheduledAt }
+    });
+  }
+}
+
+async function cancelBookingReminders(appointmentId: string) {
+  await db.bookingReminder.updateMany({ where: { organizationId: config.organizationId, appointmentId, state: 'PENDING' }, data: { state: 'CANCELLED', cancelledAt: new Date() } });
+}
+
+async function backfillBookingReminders() {
+  const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, state: { in: ['REQUESTED', 'CONFIRMED'] }, startsAt: { gt: new Date() } }, select: { id: true, ownerId: true, startsAt: true }, take: 1000 });
+  for (const appointment of appointments) { const plan = reminderPlan(appointment.startsAt); if (plan.length) await db.bookingReminder.createMany({ data: plan.map((item) => ({ organizationId: config.organizationId, appointmentId: appointment.id, ownerId: appointment.ownerId, kind: item.kind, scheduledAt: item.scheduledAt })), skipDuplicates: true }); }
+}
+
+async function offerReleasedSlot(released: { id: string; locationId: string; variantId: string; startsAt: Date; endsAt: Date }) {
+  const dayStart = new Date(`${dateKeyInMoscow(released.startsAt)}T00:00:00+03:00`);
+  const dayEnd = new Date(`${dateKeyInMoscow(released.startsAt)}T23:59:59.999+03:00`);
+  const candidates = await db.bookingWaitlistEntry.findMany({ where: { organizationId: config.organizationId, locationId: released.locationId, variantId: released.variantId, state: 'ACTIVE', preferredDate: { gte: dayStart, lte: dayEnd } }, orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }], take: 20 });
+  const candidate = candidates.find((item) => waitlistPeriodMatches(item.period, released.startsAt));
+  if (!candidate) return;
+  const expiresAt = new Date(Date.now() + WAITLIST_OFFER_MINUTES * 60_000);
+  const variant = await db.serviceVariant.findFirst({ where: { id: candidate.variantId, organizationId: config.organizationId }, include: { service: true } }); if (!variant) return;
+  const hold = await db.$transaction(async (tx) => { await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${config.organizationId}:${candidate.locationId}:${variant.service.kind}:${dateKeyInMoscow(released.startsAt)}`}))`; const available = await bookingAvailability(candidate.variantId, candidate.locationId, dateKeyInMoscow(released.startsAt)); if (!available?.slots.some((slot) => new Date(slot.startsAt).valueOf() === released.startsAt.valueOf())) throw new Error('SLOT_TAKEN'); return tx.bookingHold.create({ data: { organizationId: config.organizationId, ownerId: candidate.ownerId, petId: candidate.petId, variantId: candidate.variantId, locationId: candidate.locationId, startsAt: released.startsAt, endsAt: released.endsAt, state: 'ACTIVE', expiresAt, idempotencyKey: `waitlist:${candidate.id}:${released.id}` } }); }).catch(() => undefined);
+  if (!hold) return;
+  await db.bookingWaitlistEntry.update({ where: { id: candidate.id }, data: { state: 'OFFERED', offeredHoldId: hold.id, offeredAt: new Date(), offerExpiresAt: expiresAt } });
+  const owner = await db.owner.findFirst({ where: { id: candidate.ownerId, organizationId: config.organizationId } });
+  const conversation = owner?.telegramUserId ? await db.telegramConversation.findUnique({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId: owner.telegramUserId } } }) : undefined;
+  if (conversation) await say(conversation.chatId, `Освободилось окно ${released.startsAt.toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Moscow' })}. Мы держим его для вас ${WAITLIST_OFFER_MINUTES} минут. Подтвердите в личном кабинете VetSvet.`, [[{ text: 'Открыть кабинет', url: `${config.publicUrl}/client/` }]]).catch(() => undefined);
+}
+
+let remindersRunning = false;
+async function processBookingReminders() {
+  if (remindersRunning) return;
+  remindersRunning = true;
+  try {
+    const expiredOffers = await db.bookingWaitlistEntry.findMany({ where: { organizationId: config.organizationId, state: 'OFFERED', offerExpiresAt: { lte: new Date() }, offeredHoldId: { not: null } }, take: 50 });
+    for (const entry of expiredOffers) {
+      const hold = entry.offeredHoldId ? await db.bookingHold.findFirst({ where: { id: entry.offeredHoldId, organizationId: config.organizationId } }) : null;
+      await db.bookingWaitlistEntry.update({ where: { id: entry.id }, data: { state: 'EXPIRED' } });
+      if (hold) { await db.bookingHold.updateMany({ where: { id: hold.id, state: 'ACTIVE' }, data: { state: 'EXPIRED' } }); await offerReleasedSlot({ id: `expired-${entry.id}`, locationId: hold.locationId, variantId: hold.variantId, startsAt: hold.startsAt, endsAt: hold.endsAt }); }
+    }
+    await db.bookingHold.updateMany({ where: { organizationId: config.organizationId, state: 'ACTIVE', expiresAt: { lte: new Date() } }, data: { state: 'EXPIRED' } });
+    const due = await db.bookingReminder.findMany({ where: { organizationId: config.organizationId, state: 'PENDING', scheduledAt: { lte: new Date() } }, orderBy: { scheduledAt: 'asc' }, take: 30 });
+    for (const reminder of due) {
+      try {
+        const [appointment, owner] = await Promise.all([db.appointment.findFirst({ where: { id: reminder.appointmentId, organizationId: config.organizationId } }), db.owner.findFirst({ where: { id: reminder.ownerId, organizationId: config.organizationId } })]);
+        if (!appointment || !owner || !['REQUESTED', 'CONFIRMED'].includes(appointment.state) || appointment.startsAt <= new Date()) { await db.bookingReminder.update({ where: { id: reminder.id }, data: { state: 'CANCELLED', cancelledAt: new Date() } }); continue; }
+        const [pet, variant, conversation] = await Promise.all([db.pet.findFirst({ where: { id: appointment.petId, organizationId: config.organizationId } }), db.serviceVariant.findFirst({ where: { id: appointment.variantId, organizationId: config.organizationId }, include: { service: true } }), owner.telegramUserId ? db.telegramConversation.findUnique({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId: owner.telegramUserId } } }) : Promise.resolve(null)]);
+        const text = `${reminder.kind === 'DAY_BEFORE' ? 'Напоминаем о завтрашнем визите' : 'До визита осталось около двух часов'}: ${pet?.name ?? 'питомец'} · ${variant?.service.publicName ?? 'VetSvet'} · ${appointment.startsAt.toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Moscow' })}.`;
+        if (conversation) await say(conversation.chatId, text, [[{ text: 'Мои записи', url: `${config.publicUrl}/client/` }]]);
+        await db.$transaction([db.bookingReminder.update({ where: { id: reminder.id }, data: { state: 'SENT', sentAt: new Date(), attempts: { increment: 1 }, lastError: null } }), db.communicationLog.create({ data: { organizationId: config.organizationId, ownerId: owner.id, petId: appointment.petId, channel: conversation ? 'TELEGRAM' : 'IN_APP', direction: 'OUTBOUND', kind: 'APPOINTMENT_REMINDER', subject: 'Напоминание о визите', body: text, state: conversation ? 'SENT' : 'LOGGED', idempotencyKey: `booking-reminder:${reminder.id}` } })]);
+      } catch (error) {
+        const attempts = reminder.attempts + 1;
+        await db.bookingReminder.update({ where: { id: reminder.id }, data: { attempts, state: attempts >= 5 ? 'FAILED' : 'PENDING', scheduledAt: attempts >= 5 ? reminder.scheduledAt : new Date(Date.now() + 5 * 60_000), lastError: String(error).slice(0, 500) } });
+      }
+    }
+  } finally { remindersRunning = false; }
 }
 async function serve(response: ServerResponse, base: string, path: string) {
   const target = normalize(join(base, path));
@@ -376,21 +450,24 @@ async function showBotDays(chatId: string, telegramUserId: string, state: string
 }
 async function createBotBooking(telegramUserId: string, chatId: string, values: BotData) {
   const account = await botAccount(telegramUserId); if (!account) throw new Error('ACCOUNT_LINK_REQUIRED');
-  const [relation, variant, location] = await Promise.all([
+  const [relation, variant, location, hold] = await Promise.all([
     db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: values.petId }, include: { pet: true } }),
     db.serviceVariant.findFirst({ where: { id: values.variantId, organizationId: config.organizationId, service: { onlineBookable: true, kind: { not: 'CONSULTATION' } } }, include: { service: true } }),
-    db.location.findFirst({ where: { id: values.locationId, organizationId: config.organizationId, active: true } })
+    db.location.findFirst({ where: { id: values.locationId, organizationId: config.organizationId, active: true } }),
+    values.holdId ? db.bookingHold.findFirst({ where: { id: values.holdId, organizationId: config.organizationId, ownerId: account.owner.id, state: 'ACTIVE', expiresAt: { gt: new Date() } } }) : Promise.resolve(null)
   ]);
   const startsAt = new Date(values.startsAt); if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) throw new Error('BOOKING_DATA_CHANGED');
-  const slots = await availableBotSlots(location.id, variant.id, values.day); if (!slots.some((slot) => slot.valueOf() === startsAt.valueOf())) throw new Error('SLOT_TAKEN');
+  if (!hold || hold.petId !== relation.petId || hold.variantId !== variant.id || hold.locationId !== location.id || hold.startsAt.valueOf() !== startsAt.valueOf()) throw new Error('BOOKING_HOLD_EXPIRED');
   const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000); const commandKey = `telegram-booking:${telegramUserId}:${Date.now()}`;
   const result = await db.$transaction(async (tx) => {
+    const consumed = await tx.bookingHold.updateMany({ where: { id: hold.id, organizationId: config.organizationId, state: 'ACTIVE', expiresAt: { gt: new Date() } }, data: { state: 'CONSUMED', consumedAt: new Date() } }); if (consumed.count !== 1) throw new Error('BOOKING_HOLD_EXPIRED');
     const appointment = await tx.appointment.create({ data: { organizationId: config.organizationId, locationId: location.id, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, staffId: 'UNASSIGNED', startsAt, endsAt, state: 'REQUESTED' } });
     const invoice = await tx.invoice.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, appointmentId: appointment.id, state: variant.priceMinor > 0 ? 'ISSUED' : 'PAID', totalMinor: Math.max(0, variant.priceMinor), paidMinor: 0, currency: variant.currency, issuedAt: new Date(), lines: { create: { organizationId: config.organizationId, lineType: 'SERVICE', referenceId: variant.id, description: `${variant.service.publicName} · ${variant.name}`, unitPriceMinor: Math.max(0, variant.priceMinor), totalMinor: Math.max(0, variant.priceMinor) } } } });
     const kind = variant.service.kind === 'GROOMING' ? 'GROOMING_CONSENT' : 'PROCEDURE_CONSENT'; const template = await tx.printTemplate.findFirst({ where: { organizationId: config.organizationId, kind, state: 'PUBLISHED' }, orderBy: { version: 'desc' } });
     if (template) { const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` }); await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: relation.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Согласие VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.user.id } }); }
     return { appointment, invoice, pet: relation.pet, variant };
   });
+  await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt);
   await auditCommand({ actorId: account.user.id, action: 'appointment.requested_via_telegram', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: commandKey, payload: { petId: result.pet.id, variantId: result.variant.id } });
   await db.telegramConversation.update({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, data: { state: 'DONE', data: {}, expiresAt: new Date() } });
   return result;
@@ -417,6 +494,7 @@ async function createBotConsultation(telegramUserId: string, chatId: string, val
     }
     return { appointment, invoice, consultation, pet: relation.pet, variant };
   });
+  await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt);
   await auditCommand({ actorId: account.user.id, action: 'consultation.requested_via_telegram', aggregateType: 'Consultation', aggregateId: result.consultation.id, idempotencyKey: commandKey, payload: { appointmentId: result.appointment.id, petId: result.pet.id } });
   await db.telegramConversation.update({ where: { organizationId_telegramUserId: { organizationId: config.organizationId, telegramUserId } }, data: { state: 'DONE', data: {}, expiresAt: new Date() } });
   return result;
@@ -477,7 +555,15 @@ async function handleBotCallback(callback: NonNullable<TgUpdate['callback_query'
     const appointments = await db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id, state: { not: 'CANCELLED' } }, orderBy: { startsAt: 'desc' }, take: 10 });
     const [pets, variants, invoices] = await Promise.all([db.pet.findMany({ where: { id: { in: appointments.map((item) => item.petId) } } }), db.serviceVariant.findMany({ where: { id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } }), db.invoice.findMany({ where: { appointmentId: { in: appointments.map((item) => item.id) } } })]);
     const petById = new Map(pets.map((pet) => [pet.id, pet])); const variantById = new Map(variants.map((variant) => [variant.id, variant])); const invoiceByAppointment = new Map(invoices.filter((invoice) => invoice.appointmentId).map((invoice) => [invoice.appointmentId!, invoice]));
-    await say(chatId, appointments.length ? `Последние записи:\n\n${appointments.map((item) => { const invoice = invoiceByAppointment.get(item.id); const payment = invoice?.totalMinor ? ` · оплата ${invoice.state === 'PAID' ? 'подтверждена' : 'ожидается'}` : ''; return `• ${petById.get(item.petId)?.name ?? 'Питомец'} · ${variantById.get(item.variantId)?.service.publicName ?? 'Услуга'}\n  ${item.startsAt.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Moscow' })} · ${item.state}${payment}`; }).join('\n')}` : 'Записей пока нет.', [[{ text: '🗓 Новая запись', callback_data: 'bot:booking' }], [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return;
+    const manageable = appointments.filter((item) => canCancelBooking(item.state, item.startsAt)).slice(0, 4);
+    await say(chatId, appointments.length ? `Последние записи:\n\n${appointments.map((item) => { const invoice = invoiceByAppointment.get(item.id); const payment = invoice?.totalMinor ? ` · оплата ${invoice.state === 'PAID' ? 'подтверждена' : 'ожидается'}` : ''; return `• ${petById.get(item.petId)?.name ?? 'Питомец'} · ${variantById.get(item.variantId)?.service.publicName ?? 'Услуга'}\n  ${item.startsAt.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Moscow' })} · ${item.state}${payment}`; }).join('\n')}` : 'Записей пока нет.', [...manageable.map((item) => [{ text: `Отменить · ${petById.get(item.petId)?.name ?? 'визит'} · ${item.startsAt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' })}`, callback_data: `bot:cancel:${item.id}` }]), [{ text: 'Перенести в кабинете', url: `${config.publicUrl}/client/` }], [{ text: '🗓 Новая запись', callback_data: 'bot:booking' }], [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return;
+  }
+  const cancelMatch = command.match(/^bot:cancel:([0-9a-f-]{36})$/i);
+  if (cancelMatch) {
+    const appointment = await db.appointment.findFirst({ where: { id: cancelMatch[1], organizationId: config.organizationId, ownerId: account.owner.id } });
+    if (!appointment || !canCancelBooking(appointment.state, appointment.startsAt)) { await say(chatId, 'Эту запись уже нельзя отменить в боте. Команда видит её актуальный статус.'); return; }
+    await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED', cancelledAt: new Date(), cancellationReason: 'Отменено владельцем в Telegram' } }); await cancelBookingReminders(appointment.id); await offerReleasedSlot(appointment);
+    await auditCommand({ actorId: account.user.id, action: 'appointment.cancelled_via_telegram', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: `telegram-cancel:${appointment.id}:${Date.now()}` }); await say(chatId, 'Запись отменена. Освободившееся окно уже предложено листу ожидания.', [[{ text: 'Мои записи', callback_data: 'bot:appointments' }], [{ text: 'Новая запись', callback_data: 'bot:booking' }]]); return;
   }
   const conversation = await botConversation(telegramUserId);
   if (!conversation) { await say(chatId, 'Выбор времени истёк. Начнём заново.', [[{ text: 'Главное меню', callback_data: 'bot:menu' }]]); return; }
@@ -495,7 +581,7 @@ async function handleBotCallback(callback: NonNullable<TgUpdate['callback_query'
   const dayMatch = command.match(/^bot:day:(\d{4}-\d{2}-\d{2})$/);
   if (dayMatch && ['BOOKING_DAY', 'CONSULTATION_DAY'].includes(conversation.state)) {
     const slots = await availableBotSlots(conversation.values.locationId, conversation.values.variantId, dayMatch[1]);
-    if (!slots.length) { await say(chatId, 'На этот день свободных окон уже нет. Выберите другой.', [...botDays().map((day) => [{ text: botDayLabel(day), callback_data: `bot:day:${day}` }]), [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
+    if (!slots.length) { await saveBotConversation(telegramUserId, chatId, conversation.state, { ...conversation.values, day: dayMatch[1] }); await say(chatId, 'На этот день свободных окон уже нет. Можем поставить вас в лист ожидания и первыми предложить освободившееся время.', [[{ text: '🔔 Встать в лист ожидания', callback_data: 'bot:waitlist' }], ...botDays().map((day) => [{ text: botDayLabel(day), callback_data: `bot:day:${day}` }]), [{ text: '← Главное меню', callback_data: 'bot:menu' }]]); return; }
     const state = conversation.state === 'CONSULTATION_DAY' ? 'CONSULTATION_SLOT' : 'BOOKING_SLOT'; await saveBotConversation(telegramUserId, chatId, state, { ...conversation.values, day: dayMatch[1] });
     await say(chatId, `Свободные окна на ${botDayLabel(dayMatch[1])}:`, [...slots.map((slot) => [{ text: slot.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' }), callback_data: `bot:slot:${slot.valueOf()}` }]), [{ text: '← Выбрать другой день', callback_data: conversation.state === 'CONSULTATION_DAY' ? 'bot:consultation' : 'bot:booking' }]]); return;
   }
@@ -503,7 +589,15 @@ async function handleBotCallback(callback: NonNullable<TgUpdate['callback_query'
   if (slotMatch && ['BOOKING_SLOT', 'CONSULTATION_SLOT'].includes(conversation.state)) {
     const startsAt = new Date(Number(slotMatch[1])); const slots = await availableBotSlots(conversation.values.locationId, conversation.values.variantId, conversation.values.day);
     if (!slots.some((slot) => slot.valueOf() === startsAt.valueOf())) { await say(chatId, 'Это окно только что заняли. Пожалуйста, выберите другое.', [[{ text: 'Выбрать заново', callback_data: conversation.state === 'CONSULTATION_SLOT' ? 'bot:consultation' : 'bot:booking' }]]); return; }
-    const values: BotData = { ...conversation.values, startsAt: startsAt.toISOString() };
+    let holdId = '';
+    if (conversation.state === 'BOOKING_SLOT') {
+      const variant = await db.serviceVariant.findFirst({ where: { id: conversation.values.variantId, organizationId: config.organizationId } });
+      if (!variant) { await say(chatId, 'Услуга изменилась. Начните выбор заново.'); return; }
+      const expiresAt = bookingHoldExpiresAt(); const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000);
+      const hold = await db.$transaction(async (tx) => { await tx.bookingHold.updateMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id, state: 'ACTIVE' }, data: { state: 'RELEASED', releasedAt: new Date() } }); return tx.bookingHold.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: conversation.values.petId, variantId: conversation.values.variantId, locationId: conversation.values.locationId, startsAt, endsAt, expiresAt, idempotencyKey: `telegram-hold:${telegramUserId}:${startsAt.valueOf()}:${Date.now()}` } }); });
+      holdId = hold.id;
+    }
+    const values: BotData = { ...conversation.values, startsAt: startsAt.toISOString(), ...(holdId ? { holdId } : {}) };
     if (conversation.state === 'CONSULTATION_SLOT') {
       if (values.initialQuestion?.length >= 10) {
         try { const result = await createBotConsultation(telegramUserId, chatId, values, values.initialQuestion); const admins = await adminChats(); await Promise.all(admins.map((admin) => say(admin.chatId, `Новая консультация из бота: ${result.pet.name}\n${values.initialQuestion.slice(0, 500)}`))); await say(chatId, `Консультация для ${result.pet.name} создана на ${startsAt.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Moscow' })}.\n\n${result.invoice.totalMinor > 0 ? `К оплате ${(result.invoice.totalMinor / 100).toLocaleString('ru-RU')} ₽ по СБП ${config.sbpPhone}. После перевода пришлите сюда скриншот.` : 'Оплата не требуется.'}`, [[{ text: 'Главное меню', callback_data: 'bot:menu' }]]); } catch (error) { await say(chatId, `Не удалось создать консультацию: ${(error as Error).message}. Начните заново.`, [[{ text: 'Начать заново', callback_data: 'bot:consultation' }]]); } return;
@@ -512,7 +606,13 @@ async function handleBotCallback(callback: NonNullable<TgUpdate['callback_query'
     }
     await saveBotConversation(telegramUserId, chatId, 'BOOKING_CONFIRM', values);
     const [pet, variant] = await Promise.all([db.pet.findUnique({ where: { id: values.petId } }), db.serviceVariant.findUnique({ where: { id: values.variantId }, include: { service: true } })]);
-    await say(chatId, `Проверьте запись:\n\n${pet?.name ?? 'Питомец'} · ${variant?.service.publicName ?? 'Услуга'}\n${startsAt.toLocaleString('ru-RU', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Europe/Moscow' })}\n${variant?.priceMinor ? `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` : 'Стоимость уточнит команда'}`, [[{ text: '✓ Подтвердить запись', callback_data: 'bot:confirm' }], [{ text: 'Отмена', callback_data: 'bot:menu' }]]); return;
+    await say(chatId, `Проверьте запись:\n\n${pet?.name ?? 'Питомец'} · ${variant?.service.publicName ?? 'Услуга'}\n${startsAt.toLocaleString('ru-RU', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Europe/Moscow' })}\n${variant?.priceMinor ? `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` : 'Стоимость уточнит команда'}\n\nОкно удерживается за вами 7 минут.`, [[{ text: '✓ Подтвердить запись', callback_data: 'bot:confirm' }], [{ text: 'Отмена', callback_data: 'bot:menu' }]]); return;
+  }
+  if (command === 'bot:waitlist' && conversation.state === 'BOOKING_DAY' && conversation.values.day) {
+    const preferredDate = new Date(`${conversation.values.day}T12:00:00+03:00`);
+    const key = `telegram-waitlist:${telegramUserId}:${conversation.values.petId}:${conversation.values.variantId}:${conversation.values.day}`;
+    const entry = await db.bookingWaitlistEntry.upsert({ where: { organizationId_idempotencyKey: { organizationId: config.organizationId, idempotencyKey: key } }, update: { state: 'ACTIVE', cancelledAt: null }, create: { organizationId: config.organizationId, ownerId: account.owner.id, petId: conversation.values.petId, variantId: conversation.values.variantId, locationId: conversation.values.locationId, preferredDate, period: 'ANY', idempotencyKey: key } });
+    await saveBotConversation(telegramUserId, chatId, 'MENU'); await say(chatId, 'Готово. Вы в листе ожидания — если окно освободится, бот сразу напишет и будет держать его 30 минут.', [[{ text: 'Выбрать другой день', callback_data: 'bot:booking' }], [{ text: 'Главное меню', callback_data: 'bot:menu' }]]); return;
   }
   const speciesMatch = command.match(/^bot:species:(DOG|CAT|OTHER)$/);
   if (speciesMatch && conversation.state === 'PET_SPECIES') {
@@ -815,7 +915,7 @@ const server = createServer(async (request, response) => {
       if (!owner || owner.id !== decodeURIComponent(dashboard[1])) { json(response, 403, { error: 'FORBIDDEN' }); return; }
       const relations = await db.ownerPetRelation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { pet: true } });
       const petIds = relations.map((item) => item.pet.id);
-      const [appointments, plans, groomingVisits, consultations, clinicalCases, hospitalizations, invoices, documents, communications, packageBalances, loyaltyEntries, memberships] = await Promise.all([
+      const [appointments, plans, groomingVisits, consultations, clinicalCases, hospitalizations, invoices, documents, communications, packageBalances, loyaltyEntries, memberships, waitlistEntries, bookingHolds] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { startsAt: 'asc' }, take: 20 }),
         db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } }),
         db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 }),
@@ -827,7 +927,9 @@ const server = createServer(async (request, response) => {
         db.communicationLog.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
         db.packageBalance.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { servicePackage: true, usages: { orderBy: { usedAt: 'desc' }, take: 10 } }, orderBy: { purchasedAt: 'desc' } }),
         db.loyaltyLedgerEntry.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
-        db.ownerMembership.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { plan: true }, orderBy: { createdAt: 'desc' } })
+        db.ownerMembership.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { plan: true }, orderBy: { createdAt: 'desc' } }),
+        db.bookingWaitlistEntry.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, state: { in: ['ACTIVE', 'OFFERED'] } }, orderBy: { createdAt: 'desc' } }),
+        db.bookingHold.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, state: 'ACTIVE', expiresAt: { gt: new Date() } }, orderBy: { expiresAt: 'asc' } })
       ]);
       const variants = await db.serviceVariant.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.variantId) } }, include: { service: true } });
       const variantById = new Map(variants.map((item) => [item.id, item]));
@@ -841,7 +943,7 @@ const server = createServer(async (request, response) => {
         ...documents.filter((document) => document.petId === item.pet.id).map((document) => ({ type: 'DOCUMENT', occurredAt: document.signedAt ?? document.createdAt, title: document.title, detail: document.state })),
         ...appointments.filter((appointment) => appointment.petId === item.pet.id).flatMap((appointment) => { const invoice = invoiceByAppointment.get(appointment.id); return invoice ? [{ type: 'FINANCE', occurredAt: invoice.createdAt, title: `Счёт ${(invoice.totalMinor / 100).toLocaleString('ru-RU')} ₽`, detail: invoice.state }] : []; }),
         ...communications.filter((communication) => !communication.petId || communication.petId === item.pet.id).map((communication) => ({ type: 'COMMUNICATION', occurredAt: communication.createdAt, title: communication.subject ?? 'Связь с VetSvet', detail: communication.body }))
-      ].sort((left, right) => new Date(right.occurredAt).valueOf() - new Date(left.occurredAt).valueOf()).slice(0, 50) })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), hospitalizations: hospitalizations.map((item) => ({ id: item.id, petId: item.petId, state: item.state, acuity: item.acuity, currentPlan: item.currentPlan, ownerUpdateState: item.ownerUpdateState, alerts: item.alerts, bed: item.bed ? { label: item.bed.label, zone: item.bed.zone } : undefined, admittedAt: item.admittedAt, dischargedAt: item.dischargedAt, dischargeSummary: item.dischargeSummary, nextTasks: item.tasks.filter((task) => task.state === 'DUE').slice(0, 5).map((task) => ({ title: task.title, scheduledAt: task.scheduledAt })), lastObservation: item.observations[0] ? { acuity: item.observations[0].acuity, note: item.observations[0].note, recordedAt: item.observations[0].recordedAt } : undefined })), invoices: invoices.map((invoice) => ({ id: invoice.id, appointmentId: invoice.appointmentId, state: invoice.state, totalMinor: invoice.totalMinor, paidMinor: invoice.paidMinor, currency: invoice.currency, createdAt: invoice.createdAt, lines: invoice.lines.map((line) => ({ id: line.id, lineType: line.lineType, description: line.description, quantityMilli: line.quantityMilli, unitPriceMinor: line.unitPriceMinor, discountMinor: line.discountMinor, totalMinor: line.totalMinor })), payments: invoice.payments.map((payment) => ({ id: payment.id, amountMinor: payment.amountMinor, method: payment.method, state: payment.state, confirmedAt: payment.confirmedAt })), receiptState: invoice.fiscalReceipts[0]?.state })), documents: documents.map((document) => ({ id: document.id, petId: document.petId, appointmentId: document.appointmentId, invoiceId: document.invoiceId, kind: document.kind, title: document.title, documentVersion: document.documentVersion, state: document.state, contentHash: document.contentHash, createdAt: document.createdAt, signedAt: document.signedAt })), growth: { loyaltyPoints: loyaltyEntries.reduce((sum, entry) => sum + entry.pointsDelta, 0), loyaltyHistory: loyaltyEntries.map((entry) => ({ id: entry.id, pointsDelta: entry.pointsDelta, balanceAfter: entry.balanceAfter, reason: entry.reason, createdAt: entry.createdAt })), packages: packageBalances.map((balance) => ({ id: balance.id, petId: balance.petId, name: balance.servicePackage.name, description: balance.servicePackage.description, state: balance.state, initialCredits: balance.initialCredits, remainingCredits: balance.remainingCredits, expiresAt: balance.expiresAt, serviceIds: balance.servicePackage.serviceIds, familyShared: balance.servicePackage.familyShared, usages: balance.usages })), memberships: memberships.map((membership) => ({ id: membership.id, name: membership.plan.name, description: membership.plan.description, state: membership.state, benefits: membership.plan.benefits, autoRenew: membership.autoRenew, currentPeriodEnd: membership.currentPeriodEnd, renewsAt: membership.renewsAt })) }, petCount: petIds.length });
+      ].sort((left, right) => new Date(right.occurredAt).valueOf() - new Date(left.occurredAt).valueOf()).slice(0, 50) })), consultations: consultations.map((item) => ({ id: item.id, petId: item.petId, appointmentId: item.appointmentId, question: item.question, state: item.state, paymentState: item.paymentState, response: item.response, respondedAt: item.respondedAt, createdAt: item.createdAt })), hospitalizations: hospitalizations.map((item) => ({ id: item.id, petId: item.petId, state: item.state, acuity: item.acuity, currentPlan: item.currentPlan, ownerUpdateState: item.ownerUpdateState, alerts: item.alerts, bed: item.bed ? { label: item.bed.label, zone: item.bed.zone } : undefined, admittedAt: item.admittedAt, dischargedAt: item.dischargedAt, dischargeSummary: item.dischargeSummary, nextTasks: item.tasks.filter((task) => task.state === 'DUE').slice(0, 5).map((task) => ({ title: task.title, scheduledAt: task.scheduledAt })), lastObservation: item.observations[0] ? { acuity: item.observations[0].acuity, note: item.observations[0].note, recordedAt: item.observations[0].recordedAt } : undefined })), invoices: invoices.map((invoice) => ({ id: invoice.id, appointmentId: invoice.appointmentId, state: invoice.state, totalMinor: invoice.totalMinor, paidMinor: invoice.paidMinor, currency: invoice.currency, createdAt: invoice.createdAt, lines: invoice.lines.map((line) => ({ id: line.id, lineType: line.lineType, description: line.description, quantityMilli: line.quantityMilli, unitPriceMinor: line.unitPriceMinor, discountMinor: line.discountMinor, totalMinor: line.totalMinor })), payments: invoice.payments.map((payment) => ({ id: payment.id, amountMinor: payment.amountMinor, method: payment.method, state: payment.state, confirmedAt: payment.confirmedAt })), receiptState: invoice.fiscalReceipts[0]?.state })), documents: documents.map((document) => ({ id: document.id, petId: document.petId, appointmentId: document.appointmentId, invoiceId: document.invoiceId, kind: document.kind, title: document.title, documentVersion: document.documentVersion, state: document.state, contentHash: document.contentHash, createdAt: document.createdAt, signedAt: document.signedAt })), growth: { loyaltyPoints: loyaltyEntries.reduce((sum, entry) => sum + entry.pointsDelta, 0), loyaltyHistory: loyaltyEntries.map((entry) => ({ id: entry.id, pointsDelta: entry.pointsDelta, balanceAfter: entry.balanceAfter, reason: entry.reason, createdAt: entry.createdAt })), packages: packageBalances.map((balance) => ({ id: balance.id, petId: balance.petId, name: balance.servicePackage.name, description: balance.servicePackage.description, state: balance.state, initialCredits: balance.initialCredits, remainingCredits: balance.remainingCredits, expiresAt: balance.expiresAt, serviceIds: balance.servicePackage.serviceIds, familyShared: balance.servicePackage.familyShared, usages: balance.usages })), memberships: memberships.map((membership) => ({ id: membership.id, name: membership.plan.name, description: membership.plan.description, state: membership.state, benefits: membership.plan.benefits, autoRenew: membership.autoRenew, currentPeriodEnd: membership.currentPeriodEnd, renewsAt: membership.renewsAt })) }, booking: { waitlist: waitlistEntries, holds: bookingHolds }, petCount: petIds.length });
       return;
     }
     const clientDocumentPrint = url.pathname.match(/^\/api\/v1\/client\/documents\/([^/]+)\/print$/);
@@ -916,23 +1018,70 @@ const server = createServer(async (request, response) => {
       if (!availability) { json(response, 400, { error: 'INVALID_AVAILABILITY_REQUEST' }); return; }
       json(response, 200, { date, timezone: availability.location.timezone, location: { id: availability.location.id, name: availability.location.name }, variant: { id: availability.variant.id, name: availability.variant.name, service: availability.variant.service.publicName, kind: availability.variant.service.kind, durationMinutes: availability.variant.durationMinutes }, slots: availability.slots }); return;
     }
+    if (request.method === 'POST' && url.pathname === '/api/v1/client/booking/holds') {
+      const account = await currentOwner(request); const key = idempotencyKey(request);
+      if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      const repeated = await db.bookingHold.findUnique({ where: { organizationId_idempotencyKey: { organizationId: config.organizationId, idempotencyKey: key } } });
+      if (repeated && repeated.state === 'ACTIVE' && repeated.expiresAt > new Date()) { json(response, 200, { hold: repeated }); return; }
+      let input: { petId?: string; variantId?: string; locationId?: string; startsAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const [relation, variant, location] = await Promise.all([db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: String(input.petId ?? '') } }), db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, id: String(input.variantId ?? ''), service: { onlineBookable: true } }, include: { service: true } }), db.location.findFirst({ where: { organizationId: config.organizationId, id: String(input.locationId ?? ''), active: true } })]);
+      const startsAt = new Date(String(input.startsAt ?? ''));
+      if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date() || variant.service.kind === 'CONSULTATION') { json(response, 400, { error: 'INVALID_HOLD_REQUEST' }); return; }
+      const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000); const expiresAt = bookingHoldExpiresAt();
+      try {
+        const hold = await db.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${config.organizationId}:${location.id}:${variant.service.kind}:${dateKeyInMoscow(startsAt)}`}))`;
+          const available = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt));
+          if (!available?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) throw new Error('BOOKING_SLOT_UNAVAILABLE');
+          await tx.bookingHold.updateMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id, state: 'ACTIVE' }, data: { state: 'RELEASED', releasedAt: new Date() } });
+          return tx.bookingHold.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, locationId: location.id, startsAt, endsAt, expiresAt, idempotencyKey: key } });
+        });
+        json(response, 201, { hold: { id: hold.id, startsAt: hold.startsAt, endsAt: hold.endsAt, expiresAt: hold.expiresAt, secondsRemaining: Math.max(0, Math.floor((hold.expiresAt.valueOf() - Date.now()) / 1000)) } }); return;
+      } catch (error) { json(response, 409, { error: (error as Error).message === 'BOOKING_SLOT_UNAVAILABLE' ? 'BOOKING_SLOT_UNAVAILABLE' : 'HOLD_CHANGED_RETRY' }); return; }
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/client/booking/waitlist') {
+      const account = await currentOwner(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const entries = await db.bookingWaitlistEntry.findMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id, state: { in: ['ACTIVE', 'OFFERED'] } }, orderBy: { createdAt: 'desc' } });
+      json(response, 200, { entries }); return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/client/booking/waitlist') {
+      const account = await currentOwner(request); const key = idempotencyKey(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; } if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      const repeated = await db.bookingWaitlistEntry.findUnique({ where: { organizationId_idempotencyKey: { organizationId: config.organizationId, idempotencyKey: key } } }); if (repeated) { json(response, 200, { entry: repeated }); return; }
+      let input: { petId?: string; variantId?: string; locationId?: string; date?: string; period?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const [relation, variant, location] = await Promise.all([db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: String(input.petId ?? '') } }), db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, id: String(input.variantId ?? ''), service: { onlineBookable: true } } }), db.location.findFirst({ where: { organizationId: config.organizationId, id: String(input.locationId ?? ''), active: true } })]);
+      const date = String(input.date ?? ''); const preferredDate = new Date(`${date}T12:00:00+03:00`); const period = String(input.period ?? 'ANY').toUpperCase();
+      if (!relation || !variant || !location || Number.isNaN(preferredDate.valueOf()) || preferredDate < new Date() || !['ANY', 'MORNING', 'AFTERNOON', 'EVENING'].includes(period)) { json(response, 400, { error: 'INVALID_WAITLIST_REQUEST' }); return; }
+      await db.bookingWaitlistEntry.updateMany({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, locationId: location.id, preferredDate: { gte: new Date(`${date}T00:00:00+03:00`), lte: new Date(`${date}T23:59:59.999+03:00`) }, state: 'ACTIVE' }, data: { state: 'CANCELLED', cancelledAt: new Date() } });
+      const entry = await db.bookingWaitlistEntry.create({ data: { organizationId: config.organizationId, ownerId: account.owner.id, petId: relation.petId, variantId: variant.id, locationId: location.id, preferredDate, period, idempotencyKey: key } });
+      await auditCommand({ actorId: account.current.userId, action: 'booking.waitlist_joined', aggregateType: 'BookingWaitlistEntry', aggregateId: entry.id, idempotencyKey: `${key}:audit`, payload: { date, period } }); json(response, 201, { entry }); return;
+    }
+    const clientWaitlist = url.pathname.match(/^\/api\/v1\/client\/booking\/waitlist\/([^/]+)$/);
+    if (request.method === 'DELETE' && clientWaitlist) {
+      const account = await currentOwner(request); const key = idempotencyKey(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; } if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      const entry = await db.bookingWaitlistEntry.findFirst({ where: { id: decodeURIComponent(clientWaitlist[1]), organizationId: config.organizationId, ownerId: account.owner.id, state: { in: ['ACTIVE', 'OFFERED'] } } }); if (!entry) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      await db.$transaction([db.bookingWaitlistEntry.update({ where: { id: entry.id }, data: { state: 'CANCELLED', cancelledAt: new Date() } }), ...(entry.offeredHoldId ? [db.bookingHold.updateMany({ where: { id: entry.offeredHoldId, organizationId: config.organizationId, state: 'ACTIVE' }, data: { state: 'RELEASED', releasedAt: new Date() } })] : [])]);
+      await auditCommand({ actorId: account.current.userId, action: 'booking.waitlist_cancelled', aggregateType: 'BookingWaitlistEntry', aggregateId: entry.id, idempotencyKey: key }); json(response, 200, { entry: { id: entry.id, state: 'CANCELLED' } }); return;
+    }
     if (request.method === 'POST' && url.pathname === '/api/v1/client/appointments') {
       const account = await currentOwner(request); const key = idempotencyKey(request);
       if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
-      let input: { petId?: string; variantId?: string; locationId?: string; startsAt?: string; packageBalanceId?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
-      const [relation, variant, location, packageBalance] = await Promise.all([
+      let input: { petId?: string; variantId?: string; locationId?: string; startsAt?: string; packageBalanceId?: string; holdId?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const [relation, variant, location, packageBalance, hold] = await Promise.all([
         db.ownerPetRelation.findFirst({ where: { organizationId: config.organizationId, ownerId: account.owner.id, petId: String(input.petId ?? '') }, include: { pet: true } }),
         db.serviceVariant.findFirst({ where: { organizationId: config.organizationId, id: String(input.variantId ?? ''), service: { onlineBookable: true } }, include: { service: true } }),
         db.location.findFirst({ where: { organizationId: config.organizationId, id: String(input.locationId ?? ''), active: true } }),
-        input.packageBalanceId ? db.packageBalance.findFirst({ where: { id: String(input.packageBalanceId), organizationId: config.organizationId, ownerId: account.owner.id }, include: { servicePackage: true } }) : Promise.resolve(null)
+        input.packageBalanceId ? db.packageBalance.findFirst({ where: { id: String(input.packageBalanceId), organizationId: config.organizationId, ownerId: account.owner.id }, include: { servicePackage: true } }) : Promise.resolve(null),
+        input.holdId ? db.bookingHold.findFirst({ where: { id: String(input.holdId), organizationId: config.organizationId, ownerId: account.owner.id, state: 'ACTIVE', expiresAt: { gt: new Date() } } }) : Promise.resolve(null)
       ]);
       const startsAt = new Date(String(input.startsAt ?? ''));
       if (!relation || !variant || !location || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) { json(response, 400, { error: 'INVALID_BOOKING_REQUEST' }); return; }
       const allowed = Array.isArray(variant.allowedSpecies) && variant.allowedSpecies.includes(relation.pet.species);
       if (!allowed) { json(response, 400, { error: 'SPECIES_NOT_ALLOWED' }); return; }
       if (variant.service.kind === 'CONSULTATION') { json(response, 400, { error: 'USE_CONSULTATION_WORKFLOW' }); return; }
-      const availability = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt));
+      if (input.holdId && (!hold || hold.petId !== relation.petId || hold.variantId !== variant.id || hold.locationId !== location.id || hold.startsAt.valueOf() !== startsAt.valueOf())) { json(response, 409, { error: 'BOOKING_HOLD_EXPIRED' }); return; }
+      const availability = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt), hold?.id);
       if (!availability?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) { json(response, 409, { error: 'BOOKING_SLOT_UNAVAILABLE' }); return; }
       if (input.packageBalanceId) {
         const eligibleServices = Array.isArray(packageBalance?.servicePackage.serviceIds) ? packageBalance.servicePackage.serviceIds.map(String) : [];
@@ -948,7 +1097,8 @@ const server = createServer(async (request, response) => {
           `pet:${config.organizationId}:${relation.petId}`
         ].sort();
         for (const lockKey of lockKeys) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
-        const lockedAvailability = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt));
+        if (hold) { const consumed = await tx.bookingHold.updateMany({ where: { id: hold.id, organizationId: config.organizationId, ownerId: account.owner.id, state: 'ACTIVE', expiresAt: { gt: new Date() } }, data: { state: 'CONSUMED', consumedAt: new Date() } }); if (consumed.count !== 1) throw new Error('BOOKING_HOLD_CHANGED'); }
+        const lockedAvailability = await bookingAvailability(variant.id, location.id, dateKeyInMoscow(startsAt), hold?.id);
         if (!lockedAvailability?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) throw new Error('BOOKING_SLOT_CHANGED');
         const lockedConflict = await tx.appointment.findFirst({ where: { organizationId: config.organizationId, petId: relation.petId, startsAt, state: { in: ['REQUESTED', 'CONFIRMED', 'CHECKED_IN', 'IN_SERVICE', 'READY'] } } });
         if (lockedConflict) throw new Error('DUPLICATE_APPOINTMENT_CHANGED');
@@ -968,14 +1118,43 @@ const server = createServer(async (request, response) => {
         }
         return { appointment, invoice };
       }).catch((error: Error) => {
-        if (['PACKAGE_CREDIT_CHANGED', 'BOOKING_SLOT_CHANGED', 'DUPLICATE_APPOINTMENT_CHANGED'].includes(error.message)) { bookingFailure = error.message; return null; }
+        if (['PACKAGE_CREDIT_CHANGED', 'BOOKING_SLOT_CHANGED', 'DUPLICATE_APPOINTMENT_CHANGED', 'BOOKING_HOLD_CHANGED'].includes(error.message)) { bookingFailure = error.message; return null; }
         throw error;
       });
       if (!result) {
-        json(response, 409, { error: bookingFailure === 'BOOKING_SLOT_CHANGED' ? 'BOOKING_SLOT_UNAVAILABLE' : bookingFailure === 'DUPLICATE_APPOINTMENT_CHANGED' ? 'DUPLICATE_APPOINTMENT_REQUEST' : 'PACKAGE_CREDIT_CHANGED_RETRY' }); return;
+        json(response, 409, { error: bookingFailure === 'BOOKING_SLOT_CHANGED' ? 'BOOKING_SLOT_UNAVAILABLE' : bookingFailure === 'DUPLICATE_APPOINTMENT_CHANGED' ? 'DUPLICATE_APPOINTMENT_REQUEST' : bookingFailure === 'BOOKING_HOLD_CHANGED' ? 'BOOKING_HOLD_EXPIRED' : 'PACKAGE_CREDIT_CHANGED_RETRY' }); return;
       }
+      await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt);
+      if (hold) await db.bookingWaitlistEntry.updateMany({ where: { organizationId: config.organizationId, offeredHoldId: hold.id, state: 'OFFERED' }, data: { state: 'BOOKED', bookedAt: new Date() } });
       await auditCommand({ actorId: account.current.userId, action: 'appointment.requested', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { petId: relation.petId, variantId: variant.id, packageBalanceId: packageBalance?.id } });
       json(response, 201, { appointment: { id: result.appointment.id, state: result.appointment.state, startsAt: result.appointment.startsAt, endsAt: result.appointment.endsAt }, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor, currency: result.invoice.currency } }); return;
+    }
+    const clientAppointmentManage = url.pathname.match(/^\/api\/v1\/client\/appointments\/([^/]+)$/);
+    if (request.method === 'PATCH' && clientAppointmentManage) {
+      const account = await currentOwner(request); const key = idempotencyKey(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; } if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
+      let input: { action?: string; startsAt?: string; reason?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      const appointment = await db.appointment.findFirst({ where: { id: decodeURIComponent(clientAppointmentManage[1]), organizationId: config.organizationId, ownerId: account.owner.id } }); if (!appointment) { json(response, 404, { error: 'NOT_FOUND' }); return; }
+      const action = String(input.action ?? '').toUpperCase();
+      if (action === 'CANCEL') {
+        if (!canCancelBooking(appointment.state, appointment.startsAt)) { json(response, 409, { error: 'APPOINTMENT_NOT_CANCELLABLE' }); return; }
+        const reason = String(input.reason ?? 'Отменено владельцем').trim().slice(0, 500);
+        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED', cancelledAt: new Date(), cancellationReason: reason } });
+        await cancelBookingReminders(appointment.id); await offerReleasedSlot(appointment);
+        await auditCommand({ actorId: account.current.userId, action: 'appointment.cancelled_by_owner', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { reason } }); json(response, 200, { appointment: updated }); return;
+      }
+      if (action === 'RESCHEDULE') {
+        if (!canRescheduleBooking(appointment.state, appointment.startsAt)) { json(response, 409, { error: 'APPOINTMENT_NOT_RESCHEDULABLE' }); return; }
+        const startsAt = new Date(String(input.startsAt ?? '')); const variant = await db.serviceVariant.findFirst({ where: { id: appointment.variantId, organizationId: config.organizationId }, include: { service: true } });
+        if (!variant || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) { json(response, 400, { error: 'INVALID_RESCHEDULE_REQUEST' }); return; }
+        const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000); const available = await bookingAvailability(variant.id, appointment.locationId, dateKeyInMoscow(startsAt));
+        if (!available?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) { json(response, 409, { error: 'BOOKING_SLOT_UNAVAILABLE' }); return; }
+        try {
+          const updated = await db.$transaction(async (tx) => { await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${config.organizationId}:${appointment.locationId}:${variant.service.kind}:${dateKeyInMoscow(startsAt)}`}))`; const locked = await bookingAvailability(variant.id, appointment.locationId, dateKeyInMoscow(startsAt)); if (!locked?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) throw new Error('BOOKING_SLOT_UNAVAILABLE'); return tx.appointment.update({ where: { id: appointment.id }, data: { previousStartsAt: appointment.startsAt, previousEndsAt: appointment.endsAt, startsAt, endsAt, state: 'REQUESTED', staffId: 'UNASSIGNED', rescheduledAt: new Date(), rescheduleCount: { increment: 1 } } }); });
+          await ensureBookingReminders(updated.id, updated.ownerId, updated.startsAt); await offerReleasedSlot(appointment);
+          await auditCommand({ actorId: account.current.userId, action: 'appointment.rescheduled_by_owner', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { from: appointment.startsAt.toISOString(), to: startsAt.toISOString() } }); json(response, 200, { appointment: updated }); return;
+        } catch { json(response, 409, { error: 'BOOKING_SLOT_UNAVAILABLE' }); return; }
+      }
+      json(response, 400, { error: 'UNKNOWN_APPOINTMENT_ACTION' }); return;
     }
     const clientRebook = url.pathname.match(/^\/api\/v1\/client\/appointments\/([^/]+)\/rebook$/);
     if (request.method === 'POST' && clientRebook) {
@@ -999,6 +1178,7 @@ const server = createServer(async (request, response) => {
         if (template) { const renderedBody = renderDocumentBody(template.body, { owner: account.owner.fullName, pet: relation.pet.name, service: variant.service.publicName, amount: `${(variant.priceMinor / 100).toLocaleString('ru-RU')} ₽` }); await tx.generatedDocument.create({ data: { organizationId: config.organizationId, templateId: template.id, ownerId: account.owner.id, petId: original.petId, appointmentId: appointment.id, invoiceId: invoice.id, kind: template.kind, title: template.title ?? 'Согласие VetSvet', documentVersion: `${template.kind}:v${template.version}`, renderedBody, contentHash: digest(renderedBody), createdBy: account.current.userId } }); }
         return { appointment, invoice };
       });
+      await ensureBookingReminders(result.appointment.id, result.appointment.ownerId, result.appointment.startsAt);
       await auditCommand({ actorId: account.current.userId, action: 'appointment.rebooked', aggregateType: 'Appointment', aggregateId: result.appointment.id, idempotencyKey: key, payload: { previousAppointmentId: original.id, petId: original.petId, variantId: original.variantId } });
       json(response, 201, { appointment: result.appointment, invoice: { id: result.invoice.id, state: result.invoice.state, totalMinor: result.invoice.totalMinor } }); return;
     }
@@ -1063,23 +1243,32 @@ const server = createServer(async (request, response) => {
       const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item])); const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item])); const consultationByAppointment = new Map(consultations.map((item) => [item.appointmentId, item])); const encounterByAppointment = new Map(encounters.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item])); const hospitalizationByAppointment = new Map(hospitalizations.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
       json(response, 200, { account: { role: account.membership.role }, appointments: appointments.map((item) => { const invoice = invoiceByAppointment.get(item.id); const grooming = groomingByAppointment.get(item.id); return { id: item.id, state: item.state, startsAt: item.startsAt, endsAt: item.endsAt, staffId: item.staffId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', petId: item.petId, locationId: item.locationId, species: petById.get(item.petId)?.species ?? 'OTHER', service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга VetSvet', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', variant: variantById.get(item.variantId)?.name ?? '', invoiceState: invoice?.state ?? '—', invoice: invoice ? { id: invoice.id, state: invoice.state, totalMinor: invoice.totalMinor, paidMinor: invoice.paidMinor, currency: invoice.currency } : undefined, hospitalization: hospitalizationByAppointment.get(item.id) ? { id: hospitalizationByAppointment.get(item.id)!.id, state: hospitalizationByAppointment.get(item.id)!.state } : undefined, encounter: encounterByAppointment.get(item.id) ? { id: encounterByAppointment.get(item.id)!.id, state: encounterByAppointment.get(item.id)!.state, assessment: encounterByAppointment.get(item.id)!.assessment, plan: encounterByAppointment.get(item.id)!.plan } : undefined, consultation: consultationByAppointment.get(item.id) ? { id: consultationByAppointment.get(item.id)!.id, state: consultationByAppointment.get(item.id)!.state, paymentState: consultationByAppointment.get(item.id)!.paymentState, question: consultationByAppointment.get(item.id)!.question, response: consultationByAppointment.get(item.id)!.response } : undefined, groomingVisit: grooming ? { id: grooming.id, state: grooming.state, currentStage: grooming.currentStage, stageStartedAt: grooming.stageStartedAt, stageLog: grooming.stageLog, checklist: normalizeGroomingChecklist(grooming.checklist), report: grooming.report, homeCare: grooming.homeCare, nextCareAt: grooming.nextCareAt } : undefined }; }) }); return;
     }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/booking/availability') {
+      const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
+      const variantId = String(url.searchParams.get('variantId') ?? ''); const locationId = String(url.searchParams.get('locationId') ?? ''); const date = String(url.searchParams.get('date') ?? ''); const availability = await bookingAvailability(variantId, locationId, date);
+      if (!availability) { json(response, 400, { error: 'INVALID_AVAILABILITY_REQUEST' }); return; }
+      json(response, 200, { date, timezone: availability.location.timezone, slots: availability.slots }); return;
+    }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/booking/board') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       const date = String(url.searchParams.get('date') ?? dateKeyInMoscow(new Date()));
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { json(response, 400, { error: 'INVALID_DATE' }); return; }
       const dayStart = new Date(`${date}T00:00:00+03:00`); const dayEnd = new Date(`${date}T23:59:59.999+03:00`);
-      const [appointments, locations, variants, memberships] = await Promise.all([
+      const [appointments, locations, variants, memberships, holds, waitlist] = await Promise.all([
         db.appointment.findMany({ where: { organizationId: config.organizationId, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } }, orderBy: { startsAt: 'asc' }, take: 300 }),
         db.location.findMany({ where: { organizationId: config.organizationId, active: true }, orderBy: { name: 'asc' } }),
         db.serviceVariant.findMany({ where: { organizationId: config.organizationId }, include: { service: true }, orderBy: { service: { publicName: 'asc' } } }),
-        db.staffMembership.findMany({ where: { organizationId: config.organizationId, state: 'ACTIVE' }, include: { user: true }, orderBy: { role: 'asc' } })
+        db.staffMembership.findMany({ where: { organizationId: config.organizationId, state: 'ACTIVE' }, include: { user: true }, orderBy: { role: 'asc' } }),
+        db.bookingHold.findMany({ where: { organizationId: config.organizationId, state: 'ACTIVE', expiresAt: { gt: new Date() }, startsAt: { lt: dayEnd }, endsAt: { gt: dayStart } }, orderBy: { startsAt: 'asc' } }),
+        db.bookingWaitlistEntry.findMany({ where: { organizationId: config.organizationId, preferredDate: { gte: dayStart, lte: dayEnd }, state: { in: ['ACTIVE', 'OFFERED'] } }, orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }] })
       ]);
+      const appointmentReminders = appointments.length ? await db.bookingReminder.findMany({ where: { organizationId: config.organizationId, appointmentId: { in: appointments.map((item) => item.id) }, state: { in: ['PENDING', 'SENT', 'FAILED'] } } }) : [];
       const [owners, pets] = await Promise.all([
-        db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.ownerId) } } }),
-        db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: appointments.map((item) => item.petId) } } })
+        db.owner.findMany({ where: { organizationId: config.organizationId, id: { in: [...appointments.map((item) => item.ownerId), ...waitlist.map((item) => item.ownerId)] } } }),
+        db.pet.findMany({ where: { organizationId: config.organizationId, id: { in: [...appointments.map((item) => item.petId), ...waitlist.map((item) => item.petId)] } } })
       ]);
       const ownerById = new Map(owners.map((item) => [item.id, item])); const petById = new Map(pets.map((item) => [item.id, item])); const variantById = new Map(variants.map((item) => [item.id, item]));
-      json(response, 200, { date, timezone: 'Europe/Moscow', locations: locations.map((item) => ({ id: item.id, name: item.name, bookingCapacity: item.bookingCapacity })), variants: variants.map((item) => ({ id: item.id, service: item.service.publicName, kind: item.service.kind, name: item.name, durationMinutes: item.durationMinutes, priceMinor: item.priceMinor })), staff: memberships.map((item) => ({ id: item.userId, role: item.role, name: item.user.login ?? item.user.email ?? item.user.phone ?? item.role })), appointments: appointments.map((item) => ({ id: item.id, ownerId: item.ownerId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', petId: item.petId, pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', variantId: item.variantId, service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', staffId: item.staffId, startsAt: item.startsAt, endsAt: item.endsAt, state: item.state })) }); return;
+      json(response, 200, { date, timezone: 'Europe/Moscow', locations: locations.map((item) => ({ id: item.id, name: item.name, bookingCapacity: item.bookingCapacity })), variants: variants.map((item) => ({ id: item.id, service: item.service.publicName, kind: item.service.kind, name: item.name, durationMinutes: item.durationMinutes, priceMinor: item.priceMinor })), staff: memberships.map((item) => ({ id: item.userId, role: item.role, name: item.user.login ?? item.user.email ?? item.user.phone ?? item.role })), holds: holds.map((item) => ({ id: item.id, ownerId: item.ownerId, petId: item.petId, variantId: item.variantId, startsAt: item.startsAt, endsAt: item.endsAt, expiresAt: item.expiresAt })), waitlist: waitlist.map((item) => ({ id: item.id, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', pet: petById.get(item.petId)?.name ?? 'Питомец', variantId: item.variantId, service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга', period: item.period, state: item.state, preferredDate: item.preferredDate, offerExpiresAt: item.offerExpiresAt })), appointments: appointments.map((item) => ({ id: item.id, ownerId: item.ownerId, owner: ownerById.get(item.ownerId)?.fullName ?? 'Владелец', petId: item.petId, pet: petById.get(item.petId)?.name ?? 'Питомец', species: petById.get(item.petId)?.species ?? 'OTHER', variantId: item.variantId, service: variantById.get(item.variantId)?.service.publicName ?? 'Услуга', kind: variantById.get(item.variantId)?.service.kind ?? 'OTHER', staffId: item.staffId, startsAt: item.startsAt, endsAt: item.endsAt, state: item.state, rescheduleCount: item.rescheduleCount, reminders: appointmentReminders.filter((reminder) => reminder.appointmentId === item.id).map((reminder) => ({ kind: reminder.kind, state: reminder.state, scheduledAt: reminder.scheduledAt })) })) }); return;
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/care-directory') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
@@ -1319,7 +1508,7 @@ const server = createServer(async (request, response) => {
       const legacyCollectedMinor = invoices.filter((invoice) => invoice.state === 'PAID' && invoice.payments.length === 0).reduce((sum, invoice) => sum + invoice.paidMinor, 0); const collectedMinor = payments.reduce((sum, payment) => sum + payment.amountMinor, legacyCollectedMinor); const outstandingMinor = invoices.reduce((sum, invoice) => sum + Math.max(0, invoice.totalMinor - invoice.paidMinor), 0); const paidInvoiceIds = new Set([...payments.map((payment) => payment.invoiceId), ...invoices.filter((invoice) => invoice.state === 'PAID' && invoice.payments.length === 0).map((invoice) => invoice.id)]); const revenueByKind = new Map<string, number>();
       for (const appointment of appointments) { const invoice = invoiceByAppointment.get(appointment.id); const kind = variantById.get(appointment.variantId)?.service.kind ?? 'OTHER'; if (invoice?.paidMinor) revenueByKind.set(kind, (revenueByKind.get(kind) ?? 0) + invoice.paidMinor); }
       const completed = appointments.filter((appointment) => appointment.state === 'COMPLETED'); const returningOwnerIds = new Set([...new Set(completed.map((appointment) => appointment.ownerId))].filter((ownerId) => completed.filter((appointment) => appointment.ownerId === ownerId).length >= 2)); const itemById = new Map(inventoryItems.map((item) => [item.id, item])); const usableLots = lots.filter((lot) => !lot.expiryAt || lot.expiryAt > now); const stockValueMinor = usableLots.reduce((sum, lot) => sum + Math.round(lot.quantityMilli * (itemById.get(lot.itemId)?.purchasePriceMinor ?? 0) / 1000), 0); const expiringAt = new Date(Date.now() + 30 * 86400000);
-      json(response, 200, { range: { days, from, to: now }, definitionsVersion: 'v1', revenue: { collectedMinor, outstandingMinor, averageTicketMinor: paidInvoiceIds.size ? Math.round(collectedMinor / paidInvoiceIds.size) : 0, byKind: Object.fromEntries(revenueByKind) }, booking: { total: appointments.length, requested: appointments.filter((appointment) => appointment.state === 'REQUESTED').length, completed: completed.length, cancelled: appointments.filter((appointment) => appointment.state === 'CANCELLED').length, conversionPercent: appointments.length ? Math.round(completed.length / appointments.length * 1000) / 10 : 0 }, clients: { total: owners.length, new: owners.filter((owner) => owner.createdAt >= from).length, returning: returningOwnerIds.size, activePets: pets.length }, consultations: { total: consultations.length, paid: consultations.filter((consultation) => consultation.paymentState === 'CONFIRMED').length, waitingPayment: consultations.filter((consultation) => consultation.paymentState !== 'CONFIRMED').length, answered: consultations.filter((consultation) => consultation.state === 'ANSWERED').length }, hospital: { admitted: hospitalizations.length, active: hospitalizations.filter((hospitalization) => ['ADMITTED', 'IN_TREATMENT', 'DISCHARGE_READY'].includes(hospitalization.state)).length, treatmentDue: treatmentTasks.filter((task) => task.state === 'DUE').length, treatmentCompleted: treatmentTasks.filter((task) => task.state === 'COMPLETED').length }, inventory: { stockValueMinor, lowStockItems: inventoryItems.filter((item) => usableLots.filter((lot) => lot.itemId === item.id).reduce((sum, lot) => sum + lot.quantityMilli, 0) <= item.lowStockThresholdMilli).length, expiringLots: usableLots.filter((lot) => lot.expiryAt && lot.expiryAt <= expiringAt).length }, staff: [...new Set(appointments.filter((appointment) => appointment.staffId !== 'UNASSIGNED').map((appointment) => appointment.staffId))].map((staffId) => ({ staffId, appointments: appointments.filter((appointment) => appointment.staffId === staffId).length, completed: completed.filter((appointment) => appointment.staffId === staffId).length })) }); return;
+      json(response, 200, { range: { days, from, to: now }, definitionsVersion: 'v1', revenue: { collectedMinor, outstandingMinor, averageTicketMinor: paidInvoiceIds.size ? Math.round(collectedMinor / paidInvoiceIds.size) : 0, byKind: Object.fromEntries(revenueByKind) }, booking: { total: appointments.length, requested: appointments.filter((appointment) => appointment.state === 'REQUESTED').length, completed: completed.length, cancelled: appointments.filter((appointment) => appointment.state === 'CANCELLED').length, noShow: appointments.filter((appointment) => appointment.state === 'NO_SHOW').length, conversionPercent: appointments.length ? Math.round(completed.length / appointments.length * 1000) / 10 : 0 }, clients: { total: owners.length, new: owners.filter((owner) => owner.createdAt >= from).length, returning: returningOwnerIds.size, activePets: pets.length }, consultations: { total: consultations.length, paid: consultations.filter((consultation) => consultation.paymentState === 'CONFIRMED').length, waitingPayment: consultations.filter((consultation) => consultation.paymentState !== 'CONFIRMED').length, answered: consultations.filter((consultation) => consultation.state === 'ANSWERED').length }, hospital: { admitted: hospitalizations.length, active: hospitalizations.filter((hospitalization) => ['ADMITTED', 'IN_TREATMENT', 'DISCHARGE_READY'].includes(hospitalization.state)).length, treatmentDue: treatmentTasks.filter((task) => task.state === 'DUE').length, treatmentCompleted: treatmentTasks.filter((task) => task.state === 'COMPLETED').length }, inventory: { stockValueMinor, lowStockItems: inventoryItems.filter((item) => usableLots.filter((lot) => lot.itemId === item.id).reduce((sum, lot) => sum + lot.quantityMilli, 0) <= item.lowStockThresholdMilli).length, expiringLots: usableLots.filter((lot) => lot.expiryAt && lot.expiryAt <= expiringAt).length }, staff: [...new Set(appointments.filter((appointment) => appointment.staffId !== 'UNASSIGNED').map((appointment) => appointment.staffId))].map((staffId) => ({ staffId, appointments: appointments.filter((appointment) => appointment.staffId === staffId).length, completed: completed.filter((appointment) => appointment.staffId === staffId).length })) }); return;
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/staff/growth/dashboard') {
       const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
@@ -1465,7 +1654,7 @@ const server = createServer(async (request, response) => {
       const account = await currentStaff(request); const key = idempotencyKey(request);
       if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; }
       if (!key) { json(response, 400, { error: 'IDEMPOTENCY_KEY_REQUIRED' }); return; }
-      let input: { action?: string; note?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
+      let input: { action?: string; note?: string; startsAt?: string } = {}; try { input = JSON.parse(await body(request)); } catch { json(response, 400, { error: 'INVALID_REQUEST' }); return; }
       const appointment = await db.appointment.findFirst({ where: { id: decodeURIComponent(staffAppointment[1]), organizationId: config.organizationId } });
       if (!appointment) { json(response, 404, { error: 'NOT_FOUND' }); return; }
       const action = String(input.action ?? '').toUpperCase();
@@ -1479,6 +1668,7 @@ const server = createServer(async (request, response) => {
         if (overlap) { json(response, 409, { error: 'STAFF_TIME_CONFLICT' }); return; }
         const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'CONFIRMED', staffId: account.current.userId } });
         if (consultation) await db.consultation.update({ where: { id: consultation.id }, data: { state: 'CONFIRMED', staffId: account.current.userId } });
+        await ensureBookingReminders(updated.id, updated.ownerId, updated.startsAt);
         await auditCommand({ actorId: account.current.userId, action: 'appointment.confirmed', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key });
         json(response, 200, { appointment: { id: updated.id, state: updated.state, staffId: updated.staffId } }); return;
       }
@@ -1486,12 +1676,30 @@ const server = createServer(async (request, response) => {
         if (!['REQUESTED', 'CONFIRMED'].includes(appointment.state)) { json(response, 409, { error: 'INVALID_APPOINTMENT_STATE' }); return; }
         const linkedConsultation = await db.consultation.findUnique({ where: { appointmentId: appointment.id } });
         const updated = await db.$transaction(async (tx) => {
-          const cancelled = await tx.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED' } });
+          const cancelled = await tx.appointment.update({ where: { id: appointment.id }, data: { state: 'CANCELLED', cancelledAt: new Date(), cancellationReason: String(input.note ?? 'Отменено командой').trim().slice(0, 500) } });
           if (linkedConsultation) await tx.consultation.update({ where: { id: linkedConsultation.id }, data: { state: 'CANCELLED' } });
           return cancelled;
         });
+        await cancelBookingReminders(appointment.id); await offerReleasedSlot(appointment);
         await auditCommand({ actorId: account.current.userId, action: 'appointment.cancelled', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { note: String(input.note ?? '').trim().slice(0, 500) } });
         json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
+      }
+      if (action === 'RESCHEDULE') {
+        if (!canRescheduleBooking(appointment.state, appointment.startsAt)) { json(response, 409, { error: 'APPOINTMENT_NOT_RESCHEDULABLE' }); return; }
+        const startsAt = new Date(String(input.startsAt ?? '')); const variant = await db.serviceVariant.findFirst({ where: { id: appointment.variantId, organizationId: config.organizationId }, include: { service: true } });
+        if (!variant || Number.isNaN(startsAt.valueOf()) || startsAt <= new Date()) { json(response, 400, { error: 'INVALID_RESCHEDULE_REQUEST' }); return; }
+        const endsAt = new Date(startsAt.valueOf() + variant.durationMinutes * 60_000); const available = await bookingAvailability(variant.id, appointment.locationId, dateKeyInMoscow(startsAt));
+        if (!available?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) { json(response, 409, { error: 'BOOKING_SLOT_UNAVAILABLE' }); return; }
+        try {
+          const updated = await db.$transaction(async (tx) => { await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${config.organizationId}:${appointment.locationId}:${variant.service.kind}:${dateKeyInMoscow(startsAt)}`}))`; const locked = await bookingAvailability(variant.id, appointment.locationId, dateKeyInMoscow(startsAt)); if (!locked?.slots.some((slot) => new Date(slot.startsAt).valueOf() === startsAt.valueOf())) throw new Error('BOOKING_SLOT_UNAVAILABLE'); return tx.appointment.update({ where: { id: appointment.id }, data: { previousStartsAt: appointment.startsAt, previousEndsAt: appointment.endsAt, startsAt, endsAt, state: 'REQUESTED', staffId: 'UNASSIGNED', rescheduledAt: new Date(), rescheduleCount: { increment: 1 } } }); });
+          await ensureBookingReminders(updated.id, updated.ownerId, updated.startsAt); await offerReleasedSlot(appointment);
+          await auditCommand({ actorId: account.current.userId, action: 'appointment.rescheduled_by_staff', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { from: appointment.startsAt.toISOString(), to: startsAt.toISOString() } }); json(response, 200, { appointment: updated }); return;
+        } catch { json(response, 409, { error: 'BOOKING_SLOT_UNAVAILABLE' }); return; }
+      }
+      if (action === 'NO_SHOW') {
+        if (!canMarkNoShow(appointment.state, appointment.startsAt)) { json(response, 409, { error: 'APPOINTMENT_NOT_NO_SHOW_ELIGIBLE' }); return; }
+        const updated = await db.appointment.update({ where: { id: appointment.id }, data: { state: 'NO_SHOW', noShowAt: new Date() } }); await cancelBookingReminders(appointment.id);
+        await auditCommand({ actorId: account.current.userId, action: 'appointment.no_show', aggregateType: 'Appointment', aggregateId: appointment.id, idempotencyKey: key, payload: { note: String(input.note ?? '').trim().slice(0, 500) } }); json(response, 200, { appointment: { id: updated.id, state: updated.state } }); return;
       }
       const transitions: Record<string, string[]> = { CHECK_IN: ['CONFIRMED'], START: ['CHECKED_IN'], READY: ['IN_SERVICE'], COMPLETE: ['READY'] };
       if (action in transitions) {
@@ -1955,4 +2163,9 @@ const server = createServer(async (request, response) => {
   } catch (error) { console.error(error); json(response, 500, { error: 'INTERNAL_ERROR' }); }
 });
 
-ensureOrganization().then(ensureBookingFoundation).then(ensureDocumentFoundation).then(ensureGrowthFoundation).then(() => server.listen(config.port, '127.0.0.1', () => { console.log(`VetSvet production server on ${config.port}`); ensureBotCommandMenu().catch((error) => console.error('Telegram menu setup failed.', error)); })).catch((error) => { console.error(error); process.exit(1); });
+ensureOrganization().then(ensureBookingFoundation).then(ensureDocumentFoundation).then(ensureGrowthFoundation).then(() => server.listen(config.port, '127.0.0.1', () => {
+  console.log(`VetSvet production server on ${config.port}`);
+  ensureBotCommandMenu().catch((error) => console.error('Telegram menu setup failed.', error));
+  backfillBookingReminders().then(processBookingReminders).catch((error) => console.error('Booking reminder pass failed.', error));
+  setInterval(() => processBookingReminders().catch((error) => console.error('Booking reminder pass failed.', error)), 60_000).unref();
+})).catch((error) => { console.error(error); process.exit(1); });

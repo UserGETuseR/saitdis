@@ -42,18 +42,18 @@ model Organization {
 }
 
 model Location {
-  id             String          @id @default(uuid())
-  organizationId String
-  name           String
-  timezone       String
-  active         Boolean         @default(true)
-  bookingCapacity Int            @default(3)
-  workingHours    Json           @default("{}")
-  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  equipment      Equipment[]
-  hospitalBeds   HospitalBed[]
-  stockLots      StockLot[]
-  stockMovements StockMovement[]
+  id              String          @id @default(uuid())
+  organizationId  String
+  name            String
+  timezone        String
+  active          Boolean         @default(true)
+  bookingCapacity Int             @default(3)
+  workingHours    Json            @default("{}")
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  equipment       Equipment[]
+  hospitalBeds    HospitalBed[]
+  stockLots       StockLot[]
+  stockMovements  StockMovement[]
 
   @@index([organizationId])
 }
@@ -221,35 +221,35 @@ model StaffMembership {
 }
 
 model Owner {
-  id               String             @id @default(uuid())
-  organizationId   String
-  userId           String?
-  fullName         String
-  phone            String?
-  email            String?
-  telegramUserId   String?
-  preferredChannel String             @default("TELEGRAM")
-  address          String?
-  emergencyContact String?
-  marketingConsent Boolean            @default(false)
-  accountStatus    String             @default("ACTIVE")
-  tags             Json               @default("[]")
-  source           String?
-  utm              Json               @default("{}")
-  notes            String?
-  createdIdempotencyKey String?        @unique
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @default(now()) @updatedAt
-  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  user             UserIdentity?      @relation(fields: [userId], references: [id], onDelete: Restrict)
-  relations        OwnerPetRelation[]
-  invoices         Invoice[]
-  consultations    Consultation[]
-  hospitalizations Hospitalization[]
-  consents         Consent[]
-  surgicalCases    SurgicalCase[]
-  dentalCharts     DentalChart[]
-  files            PetFile[]
+  id                    String             @id @default(uuid())
+  organizationId        String
+  userId                String?
+  fullName              String
+  phone                 String?
+  email                 String?
+  telegramUserId        String?
+  preferredChannel      String             @default("TELEGRAM")
+  address               String?
+  emergencyContact      String?
+  marketingConsent      Boolean            @default(false)
+  accountStatus         String             @default("ACTIVE")
+  tags                  Json               @default("[]")
+  source                String?
+  utm                   Json               @default("{}")
+  notes                 String?
+  createdIdempotencyKey String?            @unique
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @default(now()) @updatedAt
+  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user                  UserIdentity?      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  relations             OwnerPetRelation[]
+  invoices              Invoice[]
+  consultations         Consultation[]
+  hospitalizations      Hospitalization[]
+  consents              Consent[]
+  surgicalCases         SurgicalCase[]
+  dentalCharts          DentalChart[]
+  files                 PetFile[]
 
   @@unique([organizationId, telegramUserId])
   @@unique([organizationId, userId])
@@ -257,62 +257,62 @@ model Owner {
 }
 
 model Pet {
-  id               String             @id @default(uuid())
-  organizationId   String
-  name             String
-  species          String
-  breed            String?
-  sex              String?
-  neuterState      String?
-  birthDate        DateTime?
-  color            String?
-  microchip        String?
-  passportId       String?
-  lifecycle        String             @default("ACTIVE")
-  medicalAlerts    Json?
-  chronicConditions Json              @default("[]")
-  behavioralAlerts Json               @default("[]")
-  feedingNotes      String?
-  medicationNotes   String?
-  vaccinationDueAt DateTime?
+  id                    String             @id @default(uuid())
+  organizationId        String
+  name                  String
+  species               String
+  breed                 String?
+  sex                   String?
+  neuterState           String?
+  birthDate             DateTime?
+  color                 String?
+  microchip             String?
+  passportId            String?
+  lifecycle             String             @default("ACTIVE")
+  medicalAlerts         Json?
+  chronicConditions     Json               @default("[]")
+  behavioralAlerts      Json               @default("[]")
+  feedingNotes          String?
+  medicationNotes       String?
+  vaccinationDueAt      DateTime?
   primaryVeterinarianId String?
-  createdIdempotencyKey String?        @unique
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @default(now()) @updatedAt
-  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  relations        OwnerPetRelation[]
-  cases            ClinicalCase[]
-  surgicalCases    SurgicalCase[]
-  dentalCharts     DentalChart[]
-  labOrders        LabOrder[]
-  consultations    Consultation[]
-  hospitalizations Hospitalization[]
-  specimens        Specimen[]
-  files            PetFile[]
+  createdIdempotencyKey String?            @unique
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @default(now()) @updatedAt
+  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  relations             OwnerPetRelation[]
+  cases                 ClinicalCase[]
+  surgicalCases         SurgicalCase[]
+  dentalCharts          DentalChart[]
+  labOrders             LabOrder[]
+  consultations         Consultation[]
+  hospitalizations      Hospitalization[]
+  specimens             Specimen[]
+  files                 PetFile[]
 
   @@index([organizationId, name])
 }
 
 model OwnerPetRelation {
-  id             String  @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   ownerId        String
   petId          String
   relation       String
-  primary        Boolean @default(false)
-  permissions    Json    @default("[\"VIEW\",\"BOOK\"]")
-  state          String  @default("ACTIVE")
-  createdAt      DateTime @default(now())
+  primary        Boolean   @default(false)
+  permissions    Json      @default("[\"VIEW\",\"BOOK\"]")
+  state          String    @default("ACTIVE")
+  createdAt      DateTime  @default(now())
   endedAt        DateTime?
-  owner          Owner   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet            Pet     @relation(fields: [petId], references: [id], onDelete: Restrict)
+  owner          Owner     @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet       @relation(fields: [petId], references: [id], onDelete: Restrict)
 
   @@unique([organizationId, ownerId, petId])
   @@index([organizationId, petId, state])
 }
 
 model PetFile {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   ownerId        String?
   petId          String
@@ -321,14 +321,14 @@ model PetFile {
   mimeType       String
   sizeBytes      Int
   contentHash    String
-  storageKey     String   @unique
-  state          String   @default("ACTIVE")
+  storageKey     String    @unique
+  state          String    @default("ACTIVE")
   uploadedBy     String
-  idempotencyKey String   @unique
-  createdAt      DateTime @default(now())
+  idempotencyKey String    @unique
+  createdAt      DateTime  @default(now())
   archivedAt     DateTime?
-  owner          Owner?   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  pet            Pet      @relation(fields: [petId], references: [id], onDelete: Restrict)
+  owner          Owner?    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pet            Pet       @relation(fields: [petId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, petId, state, createdAt])
 }
@@ -363,24 +363,99 @@ model ServiceVariant {
 }
 
 model Appointment {
-  id              String           @id @default(uuid())
-  organizationId  String
-  locationId      String
-  ownerId         String
-  petId           String
-  variantId       String
-  staffId         String
-  startsAt        DateTime
-  endsAt          DateTime
-  state           String
-  createdAt       DateTime         @default(now())
-  consultation    Consultation?
-  encounter       Encounter?
-  hospitalization Hospitalization?
-  paymentProof    TelegramPaymentProof?
+  id                 String                @id @default(uuid())
+  organizationId     String
+  locationId         String
+  ownerId            String
+  petId              String
+  variantId          String
+  staffId            String
+  startsAt           DateTime
+  endsAt             DateTime
+  state              String
+  previousStartsAt   DateTime?
+  previousEndsAt     DateTime?
+  rescheduledAt      DateTime?
+  rescheduleCount    Int                   @default(0)
+  cancelledAt        DateTime?
+  cancellationReason String?
+  noShowAt           DateTime?
+  createdAt          DateTime              @default(now())
+  consultation       Consultation?
+  encounter          Encounter?
+  hospitalization    Hospitalization?
+  paymentProof       TelegramPaymentProof?
 
   @@index([organizationId, staffId, startsAt])
   @@index([organizationId, petId, startsAt])
+}
+
+model BookingHold {
+  id             String    @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  variantId      String
+  locationId     String
+  startsAt       DateTime
+  endsAt         DateTime
+  state          String    @default("ACTIVE")
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  releasedAt     DateTime?
+  idempotencyKey String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, locationId, state, startsAt, endsAt])
+  @@index([organizationId, ownerId, state, expiresAt])
+}
+
+model BookingWaitlistEntry {
+  id             String    @id @default(uuid())
+  organizationId String
+  ownerId        String
+  petId          String
+  variantId      String
+  locationId     String
+  preferredDate  DateTime
+  period         String    @default("ANY")
+  state          String    @default("ACTIVE")
+  priority       Int       @default(0)
+  offeredHoldId  String?
+  offeredAt      DateTime?
+  offerExpiresAt DateTime?
+  bookedAt       DateTime?
+  cancelledAt    DateTime?
+  idempotencyKey String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, locationId, variantId, preferredDate, state])
+  @@index([organizationId, ownerId, state, createdAt])
+}
+
+model BookingReminder {
+  id             String    @id @default(uuid())
+  organizationId String
+  appointmentId  String
+  ownerId        String
+  kind           String
+  channel        String    @default("TELEGRAM")
+  scheduledAt    DateTime
+  state          String    @default("PENDING")
+  attempts       Int       @default(0)
+  sentAt         DateTime?
+  cancelledAt    DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([appointmentId, kind])
+  @@index([organizationId, state, scheduledAt])
+  @@index([organizationId, ownerId, createdAt])
 }
 
 model Consultation {
@@ -841,8 +916,8 @@ model OperationalTask {
 }
 
 model CommunicationLog {
-  id               String   @id @default(uuid())
-  organizationId   String
+  id                String   @id @default(uuid())
+  organizationId    String
   ownerId           String
   petId             String?
   channel           String
