@@ -8,6 +8,8 @@ import { buildBookingSlots, dateKeyInMoscow } from '../../api/src/booking-slots'
 import { bookingHoldExpiresAt, canCancelBooking, canMarkNoShow, canRescheduleBooking, reminderPlan, waitlistPeriodMatches, WAITLIST_OFFER_MINUTES } from '../../api/src/booking-lifecycle';
 import { advanceGroomingStage, canCompleteGrooming, createGroomingChecklist, normalizeGroomingChecklist, toggleGroomingChecklist } from '../../api/src/grooming-workflow';
 import { handleCareRoutes } from './care-routes';
+import { handleClinicalRoutes } from './clinical-routes';
+import { handleInboxRoutes, ingestInboxMessage } from './inbox-routes';
 import { handlePetIntelligenceRoutes, linkPetMemories, recordAppointmentStage, refreshPetIntelligence, rememberPetEvent } from './pet-intelligence-routes';
 
 type AuthMode = 'CLIENT' | 'STAFF';
@@ -54,6 +56,19 @@ const mime: Record<string, string> = {
 };
 const staffRoles = new Set(['ADMIN', 'MANAGER', 'VETERINARIAN', 'GROOMER', 'ASSISTANT', 'RECEPTIONIST']);
 const loginPattern = /^[a-z0-9][a-z0-9_.-]{2,31}$/;
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+function allowRequest(request: IncomingMessage, pathname: string) {
+  if (pathname === '/healthz' || pathname === '/telegram/webhook' || request.method === 'GET') return true;
+  const now = Date.now(); const auth = pathname.startsWith('/api/auth/'); const windowMs = auth ? 15 * 60_000 : 60_000; const limit = auth ? 20 : 180;
+  const address = String(request.headers['x-forwarded-for'] ?? request.socket.remoteAddress ?? 'unknown').split(',')[0].trim().slice(0, 80); const key = `${auth ? 'auth' : 'mutation'}:${address}`; const current = rateBuckets.get(key);
+  if (!current || current.resetAt <= now) { rateBuckets.set(key, { count: 1, resetAt: now + windowMs }); return true; }
+  current.count += 1; if (rateBuckets.size > 10_000) for (const [bucket, value] of rateBuckets) if (value.resetAt <= now) rateBuckets.delete(bucket);
+  return current.count <= limit;
+}
+function securityHeaders(response: ServerResponse, requestId: string) {
+  response.setHeader('x-request-id', requestId); response.setHeader('x-content-type-options', 'nosniff'); response.setHeader('x-frame-options', 'DENY'); response.setHeader('referrer-policy', 'strict-origin-when-cross-origin'); response.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  response.setHeader('content-security-policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'");
+}
 
 async function body(request: IncomingMessage, maxBytes = 1_000_000): Promise<string> {
   const chunks: Buffer[] = [];
@@ -293,6 +308,11 @@ async function ensureDocumentFoundation() {
       kind: 'ESTIMATE_APPROVAL',
       title: 'Согласование расчёта',
       body: '<p>Я, {{owner}}, ознакомился(ась) с расчётом VetSvet по питомцу {{pet}} на сумму {{amount}}.</p><p>Изменения объёма помощи и итоговой стоимости согласуются отдельно.</p>'
+    },
+    {
+      kind: 'CLINICAL_DISCHARGE',
+      title: 'Клиническая выписка',
+      body: '<p>Проверенная выписка по итогам ветеринарного приёма питомца {{pet}}. Документ формируется из подписанной клинической записи и доступен владельцу в VetSvet.</p>'
     }
   ];
   for (const template of templates) {
@@ -769,7 +789,13 @@ async function handleUpdate(update: TgUpdate) {
     await say(chatId, 'Чек получен и отправлен администратору на проверку.');
     return;
   }
-  if (text) await say(chatId, 'Я помогу записаться, выбрать консультацию, проверить записи или добавить питомца. Откройте меню ниже.', [[{ text: 'Открыть меню', callback_data: 'bot:menu' }]]);
+  if (text) {
+    const account = await botAccount(telegramUserId);
+    if (!account) { await say(chatId, 'Подключите Telegram из личного кабинета VetSvet — тогда обычное сообщение попадёт в единый диалог с командой.', [[{ text: 'Открыть меню', callback_data: 'bot:menu' }]]); return; }
+    const result = await ingestInboxMessage({ db, organizationId: config.organizationId, ownerId: account.owner.id, source: 'TELEGRAM_BOT', channel: 'TELEGRAM', body: text, externalKey: `telegram:${chatId}`, externalMessageId: String(message.message_id), idempotencyKey: `telegram-inbox:${update.update_id}` });
+    const admins = await adminChats(); await Promise.all(admins.map((admin) => say(admin.chatId, `${result.signal.priority === 'CRITICAL' ? '⚠️ Срочное обращение' : 'Новое сообщение'} · ${account.owner.fullName}\n${text.slice(0, 700)}\n\nОткройте единый inbox VetSvet.`).catch(() => undefined)));
+    await say(chatId, result.signal.emergencyNotice ? 'Сообщение передано команде как срочное. Если питомцу плохо прямо сейчас, не ждите ответа в чате — позвоните в клинику или обратитесь в ближайшую круглосуточную ветеринарную помощь.' : 'Сообщение сохранено в едином диалоге VetSvet. Команда увидит контекст и ответит здесь или в личном кабинете.');
+  }
 }
 
 async function startTelegramLogin(request: IncomingMessage, response: ServerResponse) {
@@ -866,7 +892,9 @@ async function setPassword(request: IncomingMessage, response: ServerResponse) {
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', config.publicUrl);
+  const requestId = String(request.headers['x-request-id'] ?? randomBytes(12).toString('hex')).replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80) || randomBytes(12).toString('hex'); securityHeaders(response, requestId);
   try {
+    if (!allowRequest(request, url.pathname)) { response.setHeader('retry-after', '60'); json(response, 429, { error: 'RATE_LIMITED', requestId }); return; }
     if (request.method === 'GET' && url.pathname === '/healthz') { await db.$queryRawUnsafe('SELECT 1'); json(response, 200, { status: 'ok' }); return; }
     if (request.method === 'POST' && url.pathname === '/telegram/webhook') {
       if (request.headers['x-telegram-bot-api-secret-token'] !== config.webhookSecret) { json(response, 403, { error: 'FORBIDDEN' }); return; }
@@ -879,6 +907,8 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/v1/auth/telegram/link/start') { await startTelegramLink(request, response); return; }
     if (await handleCareRoutes({ request, response, url, db, organizationId: config.organizationId, uploadRoot, currentStaff, body, json, idempotencyKey, audit: auditCommand })) return;
     if (await handlePetIntelligenceRoutes({ request, response, url, db, organizationId: config.organizationId, publicUrl: config.publicUrl, currentStaff, currentOwner, body, json, idempotencyKey, audit: auditCommand })) return;
+    if (await handleClinicalRoutes({ request, response, url, db, organizationId: config.organizationId, currentStaff, body, json, idempotencyKey, audit: auditCommand })) return;
+    if (await handleInboxRoutes({ request, response, url, db, organizationId: config.organizationId, currentStaff, currentOwner, body, json, idempotencyKey, audit: auditCommand, sendTelegram: (chatId, text) => say(chatId, text) })) return;
     if (request.method === 'GET' && url.pathname === '/api/auth/telegram/status') {
       const id = url.searchParams.get('requestId') ?? '';
       const record = await db.telegramLoginRequest.findUnique({ where: { id } });
@@ -908,6 +938,17 @@ const server = createServer(async (request, response) => {
       json(response, 200, { account: { mode: 'CLIENT', userId: current.userId, organizationId: config.organizationId, telegramLinked: Boolean(current.user.telegramUserId), owner } });
       return;
     }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/platform/health') {
+      const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; } if (!['ADMIN', 'MANAGER'].includes(account.membership.role)) { json(response, 403, { error: 'PLATFORM_ROLE_REQUIRED' }); return; }
+      const now = new Date(); const [outboxPending, failedReminders, criticalInbox, breachedInbox, openClinicalDrafts, lastAudit] = await Promise.all([
+        db.outboxEvent.count({ where: { organizationId: config.organizationId, publishedAt: null } }), db.bookingReminder.count({ where: { organizationId: config.organizationId, state: 'FAILED' } }), db.inboxThread.count({ where: { organizationId: config.organizationId, state: { not: 'RESOLVED' }, priority: 'CRITICAL' } }), db.inboxThread.count({ where: { organizationId: config.organizationId, state: { not: 'RESOLVED' }, slaDueAt: { lt: now } } }), db.encounter.count({ where: { organizationId: config.organizationId, state: 'DRAFT' } }), db.auditEvent.findFirst({ where: { organizationId: config.organizationId }, orderBy: { occurredAt: 'desc' } })
+      ]);
+      json(response, 200, { status: failedReminders || criticalInbox || breachedInbox ? 'attention' : 'ok', checkedAt: now, requestId, signals: { outboxPending, failedReminders, criticalInbox, breachedInbox, openClinicalDrafts }, lastAuditAt: lastAudit?.occurredAt ?? null }); return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/staff/platform/audit') {
+      const account = await currentStaff(request); if (!account) { json(response, 401, { error: 'UNAUTHORIZED' }); return; } if (account.membership.role !== 'ADMIN') { json(response, 403, { error: 'AUDIT_ROLE_REQUIRED' }); return; }
+      const cursor = String(url.searchParams.get('cursor') ?? '').slice(0, 80); const action = String(url.searchParams.get('action') ?? '').slice(0, 120); const events = await db.auditEvent.findMany({ where: { organizationId: config.organizationId, ...(action ? { action: { contains: action, mode: 'insensitive' } } : {}) }, orderBy: { occurredAt: 'desc' }, take: 101, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) }); const page = events.slice(0, 100); json(response, 200, { events: page, nextCursor: events.length > 100 ? page.at(-1)?.id : null }); return;
+    }
     const dashboard = url.pathname.match(/^\/api\/v1\/client\/owners\/([^/]+)\/dashboard$/);
     if (request.method === 'GET' && dashboard) {
       const account = await currentOwner(request);
@@ -922,7 +963,7 @@ const server = createServer(async (request, response) => {
         db.carePlan.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { tasks: { orderBy: { dueAt: 'asc' } } } }),
         db.groomingVisit.findMany({ where: { organizationId: config.organizationId, petId: { in: petIds } }, orderBy: { createdAt: 'desc' }, take: 20 }),
         db.consultation.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, orderBy: { createdAt: 'desc' }, take: 20 }),
-        db.clinicalCase.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, petId: { in: petIds } }, include: { encounters: { where: { state: 'FINALIZED' }, include: { prescriptions: true }, orderBy: { finalizedAt: 'desc' } } }, orderBy: { openedAt: 'desc' }, take: 20 }),
+        db.clinicalCase.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, petId: { in: petIds } }, include: { encounters: { where: { state: 'FINALIZED' }, include: { prescriptions: true, diagnoses: true, procedures: true }, orderBy: { finalizedAt: 'desc' } } }, orderBy: { openedAt: 'desc' }, take: 20 }),
         db.hospitalization.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { bed: true, tasks: { orderBy: { scheduledAt: 'asc' } }, observations: { orderBy: { recordedAt: 'desc' }, take: 3 } }, orderBy: { admittedAt: 'desc' }, take: 20 }),
         db.invoice.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id }, include: { lines: true, payments: { orderBy: { createdAt: 'desc' } }, fiscalReceipts: { orderBy: { createdAt: 'desc' } } }, orderBy: { createdAt: 'desc' }, take: 30 }),
         db.generatedDocument.findMany({ where: { organizationId: config.organizationId, ownerId: owner.id, revokedAt: null }, orderBy: { createdAt: 'desc' }, take: 30 }),
@@ -937,7 +978,7 @@ const server = createServer(async (request, response) => {
       const variantById = new Map(variants.map((item) => [item.id, item]));
       const groomingByAppointment = new Map(groomingVisits.map((item) => [item.appointmentId, item]));
       const invoiceByAppointment = new Map(invoices.filter((item) => item.appointmentId).map((item) => [item.appointmentId!, item]));
-      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email, preferredChannel: owner.preferredChannel, marketingConsent: owner.marketingConsent }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, breed: item.pet.breed, medicalAlerts: item.pet.medicalAlerts, vaccinationDueAt: item.pet.vaccinationDueAt, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => { const grooming = groomingByAppointment.get(appointment.id); return { id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', variantId: appointment.variantId, locationId: appointment.locationId, grooming: grooming ? { state: grooming.state, currentStage: grooming.currentStage, report: grooming.report, homeCare: grooming.homeCare, nextCareAt: grooming.nextCareAt, completedAt: grooming.completedAt } : undefined }; }), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), clinicalHistory: clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ id: encounter.id, reason: clinicalCase.reason, assessment: encounter.assessment, plan: encounter.plan, finalizedAt: encounter.finalizedAt, prescriptions: encounter.prescriptions.map((prescription) => ({ medicationName: prescription.medicationName, instructions: prescription.instructions, state: prescription.state })) }))), timeline: [
+      json(response, 200, { owner: { id: owner.id, fullName: owner.fullName, phone: owner.phone, email: owner.email, preferredChannel: owner.preferredChannel, marketingConsent: owner.marketingConsent }, pets: relations.map((item) => ({ id: item.pet.id, name: item.pet.name, species: item.pet.species, breed: item.pet.breed, medicalAlerts: item.pet.medicalAlerts, vaccinationDueAt: item.pet.vaccinationDueAt, appointments: appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => { const grooming = groomingByAppointment.get(appointment.id); return { id: appointment.id, state: appointment.state, startsAt: appointment.startsAt, endsAt: appointment.endsAt, service: variantById.get(appointment.variantId)?.service.publicName ?? 'Услуга VetSvet', variant: variantById.get(appointment.variantId)?.name ?? '', variantId: appointment.variantId, locationId: appointment.locationId, grooming: grooming ? { state: grooming.state, currentStage: grooming.currentStage, report: grooming.report, homeCare: grooming.homeCare, nextCareAt: grooming.nextCareAt, completedAt: grooming.completedAt } : undefined }; }), careTasks: plans.filter((plan) => plan.petId === item.pet.id).flatMap((plan) => plan.tasks.map((task) => ({ id: task.id, title: task.title, state: task.state, dueAt: task.dueAt }))), clinicalHistory: clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ id: encounter.id, version: encounter.version, reason: encounter.complaint ?? clinicalCase.reason, vitals: encounter.vitals, assessment: encounter.assessment, plan: encounter.plan, dischargeSummary: encounter.dischargeSummary, signatureHash: encounter.signatureHash, finalizedAt: encounter.finalizedAt, diagnoses: encounter.diagnoses.map((diagnosis) => ({ code: diagnosis.code, display: diagnosis.display, diagnosisType: diagnosis.diagnosisType, certainty: diagnosis.certainty })), procedures: encounter.procedures.map((procedure) => ({ code: procedure.code, display: procedure.display })), prescriptions: encounter.prescriptions.map((prescription) => ({ medicationName: prescription.medicationName, instructions: prescription.instructions, state: prescription.state, endsAt: prescription.endsAt })) }))), timeline: [
         ...appointments.filter((appointment) => appointment.petId === item.pet.id).map((appointment) => ({ type: 'BOOKING', occurredAt: appointment.startsAt, title: variantById.get(appointment.variantId)?.service.publicName ?? 'Визит VetSvet', detail: appointment.state })),
         ...clinicalCases.filter((clinicalCase) => clinicalCase.petId === item.pet.id).flatMap((clinicalCase) => clinicalCase.encounters.map((encounter) => ({ type: 'HEALTH', occurredAt: encounter.finalizedAt ?? clinicalCase.openedAt, title: clinicalCase.reason, detail: encounter.assessment ?? 'Клиническая запись' }))),
         ...groomingVisits.filter((visit) => visit.petId === item.pet.id).map((visit) => ({ type: 'GROOMING', occurredAt: visit.completedAt ?? visit.createdAt, title: 'Уход и груминг', detail: visit.report ?? visit.state })),

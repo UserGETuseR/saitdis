@@ -636,26 +636,70 @@ model ClinicalCase {
 }
 
 model Encounter {
-  id             String         @id @default(uuid())
-  organizationId String
-  caseId         String
-  appointmentId  String?        @unique
-  petId          String
-  version        Int
-  state          String
-  subjective     String?
-  objective      String?
-  assessment     String?
-  plan           String?
-  clinicianId    String
-  finalizedAt    DateTime?
-  amendmentOfId  String?
-  clinicalCase   ClinicalCase   @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  appointment    Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
-  prescriptions  Prescription[]
+  id               String               @id @default(uuid())
+  organizationId   String
+  caseId           String
+  appointmentId    String?              @unique
+  petId            String
+  version          Int
+  recordVersion    Int                  @default(1)
+  state            String
+  complaint        String?
+  history          Json                 @default("{}")
+  vitals           Json                 @default("{}")
+  subjective       String?
+  objective        String?
+  assessment       String?
+  plan             String?
+  dischargeSummary String?
+  clinicianId      String
+  signedBy         String?
+  signatureHash    String?
+  lockedAt         DateTime?
+  finalizedAt      DateTime?
+  amendmentOfId    String?
+  revisionReason   String?
+  idempotencyKey   String?              @unique
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  clinicalCase     ClinicalCase         @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  appointment      Appointment?         @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  diagnoses        EncounterDiagnosis[]
+  procedures       EncounterProcedure[]
+  prescriptions    Prescription[]
 
   @@unique([caseId, version])
   @@index([organizationId, petId])
+  @@index([organizationId, state, updatedAt])
+}
+
+model EncounterDiagnosis {
+  id             String    @id @default(uuid())
+  organizationId String
+  encounterId    String
+  code           String?
+  display        String
+  diagnosisType  String    @default("WORKING")
+  certainty      String    @default("SUSPECTED")
+  createdAt      DateTime  @default(now())
+  encounter      Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, encounterId])
+  @@index([organizationId, code])
+}
+
+model EncounterProcedure {
+  id             String    @id @default(uuid())
+  organizationId String
+  encounterId    String
+  code           String?
+  display        String
+  quantityMilli  Int       @default(1000)
+  unitPriceMinor Int       @default(0)
+  createdAt      DateTime  @default(now())
+  encounter      Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, encounterId])
 }
 
 model Prescription {
@@ -1044,6 +1088,53 @@ model CommunicationLog {
   @@index([organizationId, ownerId, createdAt])
   @@index([organizationId, petId, createdAt])
   @@index([organizationId, channel, state, createdAt])
+}
+
+model InboxThread {
+  id              String         @id @default(uuid())
+  organizationId  String
+  ownerId         String
+  petId           String?
+  subject         String
+  source          String
+  classification  String         @default("UNCLASSIFIED")
+  priority        String         @default("NORMAL")
+  state           String         @default("OPEN")
+  assignedRole    String?
+  assigneeId      String?
+  slaDueAt        DateTime
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  outcome         String?
+  followUpAt      DateTime?
+  externalKey     String?        @unique
+  idempotencyKey  String?        @unique
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  messages        InboxMessage[]
+
+  @@index([organizationId, state, priority, slaDueAt])
+  @@index([organizationId, ownerId, updatedAt])
+  @@index([organizationId, assigneeId, state])
+}
+
+model InboxMessage {
+  id                String      @id @default(uuid())
+  organizationId    String
+  threadId          String
+  authorType        String
+  authorId          String?
+  direction         String
+  channel           String
+  body              String
+  attachments       Json        @default("[]")
+  externalMessageId String?
+  idempotencyKey    String      @unique
+  createdAt         DateTime    @default(now())
+  thread            InboxThread @relation(fields: [threadId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, threadId, createdAt])
+  @@index([organizationId, channel, externalMessageId])
 }
 
 model Incident {

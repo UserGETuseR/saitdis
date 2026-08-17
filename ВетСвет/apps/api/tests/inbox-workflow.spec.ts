@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { canResolveInbox, classifyInboxMessage, inboxSlaState } from '../src/inbox-workflow';
+const at = new Date('2026-08-17T10:00:00.000Z');
+assert.deepEqual(classifyInboxMessage('Питомец не дышит', at), { classification: 'URGENT', priority: 'CRITICAL', slaMinutes: 5, assignedRole: 'VETERINARIAN', slaDueAt: new Date('2026-08-17T10:05:00.000Z'), emergencyNotice: true });
+assert.equal(classifyInboxMessage('Когда работает клиника?', at).classification, 'ADMINISTRATIVE');
+assert.equal(classifyInboxMessage('У кошки рвота', at).classification, 'PROFESSIONAL');
+assert.equal(canResolveInbox('OPEN', 'Владелец получил понятный ответ.'), true);
+assert.equal(canResolveInbox('OPEN', 'готово'), false);
+assert.equal(inboxSlaState(new Date('2026-08-17T09:59:00.000Z'), 'OPEN', at), 'BREACHED');
+console.log('VetSvet inbox workflow: classification, SLA and resolution checks passed');

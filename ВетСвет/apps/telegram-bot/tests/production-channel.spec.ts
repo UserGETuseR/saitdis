@@ -8,7 +8,12 @@ const telegramUserId = '880001';
 const telegramChatId = '880001';
 const adminTelegramId = '990001';
 const adminChatId = '990001';
-const db = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  console.log('VetSvet production channel: skipped (DATABASE_URL is not configured)');
+  process.exit(0);
+}
+const db = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 let updateId = 100;
 
 async function waitForHealth() {
