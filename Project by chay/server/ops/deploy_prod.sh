@@ -30,7 +30,7 @@ test -f "$PROJECT_DIR/server/src/production-server.js"
 test -f "$PROJECT_DIR/index.html"
 
 if ! id chay >/dev/null 2>&1; then useradd --system --home "$API_ROOT" --shell /usr/sbin/nologin chay; fi
-install -d -o chay -g chay "$API_ROOT/releases"
+install -d -o chay -g chay "$API_ROOT" "$API_ROOT/releases" "$API_ROOT/.npm"
 install -d "$WEB_ROOT/releases"
 
 DB_PASSWORD="$(openssl rand -hex 24)"
@@ -54,11 +54,14 @@ set +a
 PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U chay_app -d chay -Atqc 'select current_user' | grep -qx chay_app
 sudo -u postgres psql -d chay -v ON_ERROR_STOP=1 -f "$PROJECT_DIR/server/sql/001_production.sql" >/var/log/chay-migration.log
 
+if [[ -d "$API_RELEASE" && ! -f "$API_RELEASE/node_modules/pg/package.json" ]]; then
+  mv "$API_RELEASE" "$API_RELEASE.failed-$STAMP"
+fi
 if [[ ! -d "$API_RELEASE" ]]; then
   install -d -o chay -g chay "$API_RELEASE"
   cp -a "$PROJECT_DIR/server/package.json" "$PROJECT_DIR/server/package-lock.json" "$PROJECT_DIR/server/src" "$API_RELEASE/"
   chown -R chay:chay "$API_RELEASE"
-  sudo -u chay npm --prefix "$API_RELEASE" ci --omit=dev --ignore-scripts >/var/log/chay-npm-install.log
+  sudo -u chay npm --cache "$API_ROOT/.npm" --prefix "$API_RELEASE" ci --omit=dev --ignore-scripts >/var/log/chay-npm-install.log
 fi
 ln -sfn "$API_RELEASE" "$API_ROOT/current"
 
