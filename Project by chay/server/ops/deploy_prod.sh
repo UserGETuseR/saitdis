@@ -124,6 +124,7 @@ fi
 nginx -t
 ln -sfn "$WEB_RELEASE" "$WEB_ROOT/current"
 systemctl reload nginx
+sleep 2
 
 curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/api/health | grep -q '"service":"chay-api"'
 curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/ | grep -q 'assets/js/api.js'
