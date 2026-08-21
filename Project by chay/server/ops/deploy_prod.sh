@@ -41,13 +41,25 @@ if ! id chay >/dev/null 2>&1; then useradd --system --home "$API_ROOT" --shell /
 install -d -o chay -g chay "$API_ROOT" "$API_ROOT/releases" "$API_ROOT/.npm"
 install -d "$WEB_ROOT/releases"
 
-DB_PASSWORD="$(openssl rand -hex 24)"
 if ! sudo -u postgres psql -Atqc "select 1 from pg_roles where rolname='chay_app'" | grep -qx 1; then
   sudo -u postgres psql -v ON_ERROR_STOP=1 -c "create role chay_app with login" >/dev/null
 fi
-sudo -u postgres psql -v ON_ERROR_STOP=1 -v role_password="$DB_PASSWORD" <<'SQL' >/dev/null
+DB_PASSWORD=""
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+  DB_PASSWORD="${DATABASE_URL#postgresql://chay_app:}"
+  DB_PASSWORD="${DB_PASSWORD%%@*}"
+  if ! PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U chay_app -d chay -Atqc 'select current_user' 2>/dev/null | grep -qx chay_app; then DB_PASSWORD=""; fi
+fi
+if [[ -z "$DB_PASSWORD" ]]; then
+  DB_PASSWORD="$(openssl rand -hex 24)"
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -v role_password="$DB_PASSWORD" <<'SQL' >/dev/null
 alter role chay_app with login password :'role_password';
 SQL
+fi
 if ! sudo -u postgres psql -Atqc "select 1 from pg_database where datname='chay'" | grep -qx 1; then
   sudo -u postgres createdb -O chay_app chay
 fi
