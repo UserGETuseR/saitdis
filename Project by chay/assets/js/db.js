@@ -21,8 +21,20 @@ window.DB = (function () {
   }
 
   function write(coll, arr) {
+    const before = read(coll);
     try { localStorage.setItem(key(coll), JSON.stringify(arr)); } catch (e) {}
     emit(coll, arr);
+    // In production every local mutation is mirrored to the same-origin API.
+    // Hydration is explicitly ignored to avoid write-back loops.
+    if (window.ApiClient && ApiClient.isReady() && !ApiClient.isHydrating()) {
+      const old = new Map(before.map((item) => [item.id, JSON.stringify(item)]));
+      arr.forEach((item) => {
+        if (!item || !item.id || old.get(item.id) === JSON.stringify(item)) return;
+        ApiClient.pushRecord(coll, item);
+        old.delete(item.id);
+      });
+      old.forEach((_, id) => ApiClient.removeRecord(coll, id));
+    }
   }
 
   function emit(coll, arr) {
@@ -31,7 +43,8 @@ window.DB = (function () {
   }
 
   function uid(prefix) {
-    return (prefix || "id") + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    if (window.crypto && crypto.randomUUID) return (prefix || "id") + "_" + crypto.randomUUID().replace(/-/g, "");
+    return (prefix || "id") + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   }
 
   function collection(name) {

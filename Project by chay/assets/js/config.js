@@ -4,9 +4,10 @@
 // и впиши ключи проекта (см. supabase/schema.sql и assets/js/db.supabase.js).
 
 window.CHA_CONFIG = {
-  backend: "local",            // 'local' | 'supabase'
+  backend: "auto",             // 'auto' probes the same-origin production API; 'local' forces demo mode
+  apiBase: "/api",
   supabaseUrl: "",             // https://xxxx.supabase.co
   supabaseAnonKey: "",         // публичный anon-ключ
   tenantId: null,              // id чайной (для мультиаренды)
-  appVersion: "12",
+  appVersion: "13",
 };

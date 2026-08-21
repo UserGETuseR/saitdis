@@ -1,0 +1,23 @@
+[Unit]
+Description=Chaynaya Istoriya production API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=chay
+Group=chay
+WorkingDirectory=/var/www/chay-api/current
+EnvironmentFile=/etc/chay-api.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/production-server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/chay-api
+
+[Install]
+WantedBy=multi-user.target

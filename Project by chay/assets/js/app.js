@@ -10,6 +10,9 @@ window.App = (function () {
     "/mushrooms": Views.mushrooms,
     "/passport": Views.passport,
     "/meditate": Views.meditate,
+    "/brew": Views.brew,
+    "/certificate": Views.certificate,
+    "/team": Views.team,
     "/auth": Views.auth,
     "/client": Views.client,
     "/master": Views.master,
@@ -21,9 +24,10 @@ window.App = (function () {
   const GUARD = {
     "/client": (u) => u && u.role === "client",
     "/master": (u) => u && u.role === "master",
-    "/admin": (u) => u && u.role === "admin",
+    "/admin": (u) => u && (u.role === "admin" || u.role === "owner"),
     "/profile": (u) => !!u,
     "/passport": (u) => !!u,
+    "/team": (u) => u && (u.role === "master" || u.role === "admin" || u.role === "owner"),
   };
 
   let root;
@@ -61,15 +65,18 @@ window.App = (function () {
       events: { route: "/events", icon: "bi-calendar-event", label: "Афиша" },
       mush: { route: "/mushrooms", icon: "bi-flower1", label: "Грибы" },
       med: { route: "/meditate", icon: "bi-wind", label: "Практики" },
+      brew: { route: "/brew", icon: "bi-hourglass-split", label: "Заварить" },
+      cert: { route: "/certificate", icon: "bi-gift", label: "Сертификат" },
+      team: { route: "/team", icon: "bi-chat-square-heart", label: "Команда" },
       pass: { route: "/passport", icon: "bi-patch-check", label: "Паспорт" },
       client: { route: "/client", icon: "bi-grid", label: "Кабинет" },
       master: { route: "/master", icon: "bi-grid", label: "Кабинет" },
       admin: { route: "/admin", icon: "bi-speedometer2", label: "Управление" },
     };
-    if (!u) return { links: [L.home, L.elx, L.menu, L.events, L.alch, L.med], tab: [L.home, L.elx, L.menu, L.events, L.med] };
-    if (u.role === "admin") return { links: [L.admin, L.menu, L.events, L.med], tab: [L.admin, L.menu, L.events, L.med] };
-    if (u.role === "master") return { links: [L.master, L.elx, L.menu, L.events, L.med], tab: [L.master, L.elx, L.menu, L.events, L.med] };
-    return { links: [L.client, L.elx, L.menu, L.events, L.alch, L.med, L.pass], tab: [L.client, L.elx, L.menu, L.events, L.pass] };
+    if (!u) return { links: [L.home, L.brew, L.menu, L.events, L.cert], tab: [L.home, L.brew, L.menu, L.events, L.cert] };
+    if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.menu, L.events, L.med], tab: [L.admin, L.team, L.menu, L.events, L.med] };
+    if (u.role === "master") return { links: [L.master, L.team, L.brew, L.menu, L.med], tab: [L.master, L.team, L.brew, L.menu, L.med] };
+    return { links: [L.client, L.brew, L.menu, L.events, L.cert, L.pass], tab: [L.client, L.brew, L.menu, L.cert, L.pass] };
   }
 
   function renderChrome(path) {
@@ -103,7 +110,7 @@ window.App = (function () {
 
   function afterAuth(user) {
     UI.toast(`Добро пожаловать, ${user.name.split(" ")[0]}`);
-    const home = user.role === "admin" ? "admin" : user.role === "master" ? "master" : "client";
+    const home = (user.role === "admin" || user.role === "owner") ? "admin" : user.role === "master" ? "master" : "client";
     UI.navigate("#/" + home);
   }
 
@@ -144,7 +151,7 @@ window.App = (function () {
 
   /* ----- Позиции меню: напитки, холодный чай, десерты ----- */
   function addMenuItem(id) {
-    const pools = [window.SIGNATURE_DRINKS, window.COLD_DRINKS, window.DESSERTS];
+    const pools = [window.SIGNATURE_DRINKS, window.MATCHA_DRINKS, window.COLD_DRINKS, window.DESSERTS];
     let item = null;
     for (const p of pools) { if (p) { const f = p.find((x) => x.id === id); if (f) { item = f; break; } } }
     if (!item) return;
@@ -246,12 +253,23 @@ window.App = (function () {
     document.getElementById("cartOverlay").classList.remove("open");
   }
 
-  function init() {
+  async function init() {
     root = document.getElementById("app");
 
-    // инициализация аккаунтов и склада
+    const syncState = document.getElementById("syncState");
+    const paintSync = ({ state }) => {
+      if (!syncState) return;
+      const labels = { checking:"соединение", cloud:"в системе", degraded:"синхронизация", local:"локально" };
+      syncState.dataset.state = state;
+      syncState.querySelector("span").textContent = labels[state] || "локально";
+    };
+    if (window.ApiClient) { ApiClient.subscribe(paintSync); paintSync({ state:ApiClient.status() }); }
+
+    // В production сначала восстанавливаем защищённую серверную сессию и
+    // общие данные. При локальном запуске автоматически остаётся demo fallback.
+    await Auth.initialize();
     Auth.seedIfEmpty();
-    if (window.Inventory) Inventory.seedIfEmpty();
+    if (window.Inventory && (!Auth.isCloud() || Auth.isStaff())) Inventory.seedIfEmpty();
     const cur = Auth.current();
     Store.useUser(cur ? cur.id : null);
     Auth.subscribe((user) => {
@@ -269,13 +287,13 @@ window.App = (function () {
     document.getElementById("cartBtn").addEventListener("click", openCart);
     document.getElementById("cartClose").addEventListener("click", closeCart);
     document.getElementById("cartOverlay").addEventListener("click", closeCart);
-    document.getElementById("checkoutBtn").addEventListener("click", () => {
+    document.getElementById("checkoutBtn").addEventListener("click", async () => {
       if (!window.Store.get().cart.length) return;
       const cart = window.Store.get().cart.slice();
       const total = UI.rub(window.Store.cartTotal());
       const u = Auth.current();
       // создаём реальный заказ в базе (списывает склад, копит аналитику)
-      window.Orders.create({
+      const order = window.Orders.create({
         userId: u ? u.id : null,
         userName: u ? u.name : "Гость",
         items: cart,
@@ -283,7 +301,8 @@ window.App = (function () {
       });
       window.Store.clearCart();
       renderCart(); updateCartBadge();
-      UI.toast("Заказ оформлен · " + total);
+      const synced = !window.ApiClient || !ApiClient.isReady() ? false : await ApiClient.whenSynced("orders", order.id);
+      UI.toast(synced ? "Заказ передан мастеру · " + total : "Заказ сохранён на этом устройстве · " + total);
       closeCart();
     });
 

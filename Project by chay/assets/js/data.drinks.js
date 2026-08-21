@@ -34,6 +34,13 @@ window.COLD_DRINKS = [
   { id: "pranya",        name: "Пряня",             art: "pranya",   price: 300, comp: "габа + ку цяо" },
 ];
 
+// Маття — отдельная свежая линия в брендированных стаканах.
+window.MATCHA_DRINKS = [
+  { id: "matcha_latte", name: "Маття-латте", art: "matcha_latte", price: 350, comp: "японская маття · молоко · мягкая пена", tone: "latte" },
+  { id: "matcha_tonic", name: "Маття-тоник", art: "matcha_tonic", price: 350, comp: "маття · тоник · прозрачный лёд", tone: "tonic" },
+  { id: "matcha_bumble", name: "Маття-бамбл", art: "matcha_bumble", price: 390, comp: "маття · апельсин · цитрусовый лёд", tone: "bumble" },
+];
+
 // Десерты
 window.DESSERTS = [
   {

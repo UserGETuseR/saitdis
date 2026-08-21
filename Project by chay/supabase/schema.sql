@@ -96,6 +96,42 @@ create index if not exists idx_orders_tenant_created on orders(tenant_id, create
 create index if not exists idx_orders_user on orders(user_id);
 create index if not exists idx_shifts_tenant_date on shifts(tenant_id, date);
 
+-- ───────────────────── Коммуникации и рабочие циклы ─────────────────────
+create table if not exists team_messages (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid references tenants(id),
+  author_id uuid references profiles(id), audience text not null,
+  subject text not null, body text not null, status text not null default 'open',
+  entity_id uuid, created_at timestamptz not null default now()
+);
+
+create table if not exists staff_requests (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid references tenants(id),
+  author_id uuid references profiles(id), assigned_role text not null,
+  kind text not null, title text not null, details text, urgency text not null default 'normal',
+  status text not null default 'new', history jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+
+create table if not exists shift_reports (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid references tenants(id),
+  author_id uuid references profiles(id), shift_label text not null,
+  checklist jsonb not null default '{}'::jsonb, note text,
+  status text not null default 'attention', created_at timestamptz not null default now()
+);
+
+create table if not exists certificates (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid references tenants(id),
+  buyer_id uuid references profiles(id), buyer_name text not null, recipient_name text not null,
+  phone text not null, amount numeric not null check (amount > 0), wish text,
+  code text unique not null, status text not null default 'new',
+  created_at timestamptz not null default now(), confirmed_at timestamptz
+);
+
+create index if not exists idx_team_messages_tenant_created on team_messages(tenant_id, created_at desc);
+create index if not exists idx_staff_requests_tenant_status on staff_requests(tenant_id, status, created_at desc);
+create index if not exists idx_shift_reports_tenant_created on shift_reports(tenant_id, created_at desc);
+create index if not exists idx_certificates_tenant_status on certificates(tenant_id, status, created_at desc);
+
 -- ============================================================
 -- RLS (Row Level Security) — каждый видит только своё/свою чайную.
 -- Включаем и описываем базовые политики. Доработать под бизнес-логику.
@@ -105,6 +141,10 @@ alter table orders      enable row level security;
 alter table order_items enable row level security;
 alter table inventory   enable row level security;
 alter table shifts      enable row level security;
+alter table team_messages enable row level security;
+alter table staff_requests enable row level security;
+alter table shift_reports enable row level security;
+alter table certificates enable row level security;
 
 -- helper: текущий tenant пользователя
 create or replace function current_tenant() returns uuid language sql stable as $$
@@ -139,6 +179,25 @@ create policy inventory_rw on inventory
 create policy shifts_rw on shifts
   for all using (tenant_id = current_tenant())
   with check (current_role_name() in ('admin','owner'));
+
+create policy team_messages_staff on team_messages for all
+  using (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'))
+  with check (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'));
+
+create policy staff_requests_staff on staff_requests for all
+  using (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'))
+  with check (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'));
+
+create policy shift_reports_staff on shift_reports for all
+  using (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'))
+  with check (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'));
+
+create policy certificates_read on certificates for select
+  using (buyer_id = auth.uid() or (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner')));
+create policy certificates_create on certificates for insert
+  with check (buyer_id = auth.uid() or current_role_name() in ('master','admin','owner'));
+create policy certificates_staff_update on certificates for update
+  using (tenant_id = current_tenant() and current_role_name() in ('master','admin','owner'));
 
 -- ============================================================
 -- Триггер: автосоздание профиля при регистрации в Supabase Auth.

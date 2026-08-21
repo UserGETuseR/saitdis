@@ -4,21 +4,29 @@ Public URL: `https://chay.occochi.ru`
 
 ## Runtime
 
-The current application is a static PWA. It does not need a Node.js process on
-the server. Nginx serves `index.html`, `assets/`, `img/`, the manifest and the
-service worker.
+Nginx serves the public PWA and proxies `/api/` to a dedicated Node.js service
+on `127.0.0.1:4410`. PostgreSQL stores accounts, protected sessions, orders,
+inventory, shifts, messages, staff requests, reports, certificates and audit
+events. The API service is described by `server/ops/chay-api.service`.
 
 ## Data boundary
 
-`assets/js/config.js` currently selects `backend: "local"`. Accounts, orders,
-inventory and shifts are therefore stored only in the current browser's
-`localStorage`. This is suitable for a demonstration, but it is not a shared or
-secure production database.
+`assets/js/config.js` selects `backend: "auto"`. On production the same-origin
+API becomes the source of truth. A local static launch automatically falls back
+to browser-only demo data; this fallback must not be confused with production.
 
-The repository contains a Supabase schema and bridge skeleton, but enabling it
-requires a real Supabase project, Row Level Security verification and replacing
-the local authentication path. No private or service-role key belongs in this
-repository.
+No database password or private key belongs in Git. Production secrets live in
+`/etc/chay-api.env` with mode `0600`.
+
+## Production checks
+
+- `GET /api/health` must return `{"ok":true,"service":"chay-api"}`.
+- `systemctl is-active chay-api` must return `active`.
+- Registration always creates a `client`; only an admin/owner can grant staff roles.
+- Passwords use salted scrypt hashes. Browser sessions are `Secure`, `HttpOnly`
+  and `SameSite=Lax`; every privileged mutation is written to the audit log.
+- The local fallback is intentionally not an offline implementation. Offline
+  behavior remains a separate product stage, as agreed.
 
 ## Release layout
 
@@ -33,6 +41,11 @@ Only public runtime files are copied into a release:
 - `sw.js`
 - `assets/`
 - `img/`
+- `kp/`
+
+The API release is stored separately under `/var/www/chay-api/releases/<git-sha>`
+and contains `server/src`, `server/package.json`, `server/package-lock.json` and
+installed production dependencies.
 
 This keeps local launch scripts, tests and database notes outside the public
 document root.

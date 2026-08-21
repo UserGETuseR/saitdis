@@ -650,13 +650,13 @@ Views.auth = function () {
           <button type="submit" class="btn primary full" id="authSubmit"><i class="bi bi-box-arrow-in-right"></i> Войти</button>
         </form>
 
-        <div class="auth-demo">
+        <div class="auth-demo" id="authDemo">
           <span class="muted">Демо-доступы для презентации:</span>
           <button class="chip-btn" data-demo="client"><i class="bi bi-cup-hot"></i> Клиент</button>
           <button class="chip-btn" data-demo="master"><i class="bi bi-yin-yang"></i> Мастер</button>
           <button class="chip-btn" data-demo="admin"><i class="bi bi-speedometer2"></i> Управляющий</button>
         </div>
-        <p class="disclaimer"><i class="bi bi-shield-lock"></i> Прототип: аккаунты хранятся в браузере. Для боевой версии — серверная авторизация и шифрование.</p>
+        <p class="disclaimer" id="authSecurity"><i class="bi bi-shield-lock"></i> Защищённая сессия, пароль хранится только в виде стойкого серверного хэша. Роль сотрудника назначает управляющая.</p>
       </div>
     </section>`;
   return {
@@ -667,6 +667,13 @@ Views.auth = function () {
       const err = root.querySelector("#authError");
       const title = root.querySelector("#authTitle");
       const submit = root.querySelector("#authSubmit");
+      if (Auth.isCloud()) {
+        root.querySelector("#authDemo").classList.add("hidden");
+        const rolePick = root.querySelector(".role-pick")?.closest(".field");
+        if (rolePick) rolePick.classList.add("cloud-role-field");
+      } else {
+        root.querySelector("#authSecurity").innerHTML = '<i class="bi bi-device-hdd"></i> Локальный режим разработки: данные хранятся только в этом браузере.';
+      }
 
       function setMode(m) {
         mode = m;
@@ -682,12 +689,14 @@ Views.auth = function () {
 
       function showErr(msg) { err.textContent = msg; err.classList.remove("hidden"); }
 
-      form.addEventListener("submit", (e) => {
+      form.addEventListener("submit", async (e) => {
         e.preventDefault();
+        submit.disabled = true;
         const data = Object.fromEntries(new FormData(form).entries());
-        const res = mode === "login"
+        const res = await (mode === "login"
           ? Auth.login(data.login, data.pass)
-          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, role: data.role });
+          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, role: "client" }));
+        submit.disabled = false;
         if (!res.ok) { showErr(res.error); return; }
         App.afterAuth(res.user);
       });
@@ -702,10 +711,10 @@ Views.auth = function () {
       });
 
       root.querySelectorAll("[data-demo]").forEach((b) =>
-        b.addEventListener("click", () => {
+        b.addEventListener("click", async () => {
           const creds = { master: ["master", "master"], admin: ["admin", "admin"], client: ["anna", "anna"] };
           const cred = creds[b.dataset.demo] || creds.client;
-          const res = Auth.login(cred[0], cred[1]);
+          const res = await Auth.login(cred[0], cred[1]);
           if (res.ok) App.afterAuth(res.user); else showErr(res.error);
         })
       );
@@ -1430,11 +1439,11 @@ Views.profile = function () {
       // ——— аккаунт ———
       const acctForm = root.querySelector("#acctForm");
       const acctErr = root.querySelector("#acctErr");
-      acctForm.addEventListener("submit", (e) => {
+      acctForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         hideErr(acctErr);
         const d = Object.fromEntries(new FormData(acctForm).entries());
-        const res = Auth.updateAccount({ name: d.name, login: d.login, email: d.email, avatarColor: d.avatarColor });
+        const res = await Auth.updateAccount({ name: d.name, login: d.login, email: d.email, avatarColor: d.avatarColor });
         if (!res.ok) { showErr(acctErr, res.error); return; }
         UI.toast("Аккаунт обновлён");
         App.render();
@@ -1453,12 +1462,12 @@ Views.profile = function () {
       // ——— смена пароля ———
       const passForm = root.querySelector("#passForm");
       const passErr = root.querySelector("#passErr");
-      passForm.addEventListener("submit", (e) => {
+      passForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         hideErr(passErr);
         const d = Object.fromEntries(new FormData(passForm).entries());
         if (d.newPass !== d.newPass2) { showErr(passErr, "Новые пароли не совпадают"); return; }
-        const res = Auth.changePassword(d.oldPass, d.newPass);
+        const res = await Auth.changePassword(d.oldPass, d.newPass);
         if (!res.ok) { showErr(passErr, res.error); return; }
         passForm.reset();
         UI.toast("Пароль изменён");
@@ -1472,7 +1481,7 @@ Views.profile = function () {
    ============================================================ */
 Views.admin = function () {
   const u = Auth.current();
-  if (!u || u.role !== "admin") return Views.auth();
+  if (!u || !["admin", "owner"].includes(u.role)) return Views.auth();
 
   const TABS = [
     { key: "overview", icon: "bi-speedometer2", label: "Обзор" },
@@ -1702,9 +1711,9 @@ Views.admin = function () {
 
         // персонал
         panel.querySelectorAll("[data-promote]").forEach((b) =>
-          b.addEventListener("click", () => { Auth.setRole(b.dataset.promote, "master"); UI.toast("Гость повышен до мастера"); renderPanel(); }));
+          b.addEventListener("click", async () => { const res=await Auth.setRole(b.dataset.promote, "master"); UI.toast(res.ok?"Гость повышен до мастера":res.error); renderPanel(); }));
         panel.querySelectorAll("[data-demote]").forEach((b) =>
-          b.addEventListener("click", () => { Auth.setRole(b.dataset.demote, "client"); UI.toast("Мастер переведён в гости"); renderPanel(); }));
+          b.addEventListener("click", async () => { const res=await Auth.setRole(b.dataset.demote, "client"); UI.toast(res.ok?"Мастер переведён в гости":res.error); renderPanel(); }));
 
         // смены
         panel.querySelectorAll("[data-shift-add]").forEach((b) =>

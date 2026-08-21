@@ -1,0 +1,19 @@
+{
+  "name": "chaynaya-istoriya-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production API for Chaynaya Istoriya",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/production-server.js",
+    "check": "node --check src/production-server.js",
+    "test": "node --test",
+    "create-user": "node src/create-user.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
