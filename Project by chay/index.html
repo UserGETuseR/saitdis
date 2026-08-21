@@ -208,6 +208,12 @@
     // Регистрация service worker (PWA: установка на телефон + офлайн).
     // Работает только по http(s)/localhost, не по file://
     if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      var reloadingForWorker = false;
+      navigator.serviceWorker.addEventListener("controllerchange", function () {
+        if (reloadingForWorker) return;
+        reloadingForWorker = true;
+        location.reload();
+      });
       window.addEventListener("load", function () {
         navigator.serviceWorker.register("sw.js").catch(function () {});
       });
