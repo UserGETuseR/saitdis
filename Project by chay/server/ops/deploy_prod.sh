@@ -138,9 +138,12 @@ ln -sfn "$WEB_RELEASE" "$WEB_ROOT/current"
 systemctl reload nginx
 sleep 2
 
-curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/api/health | grep -q '"service":"chay-api"'
-curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/ | grep -q 'assets/js/api.js'
-curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/kp/ | grep -q '30 000'
+curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-api.json https://chay.occochi.ru/api/health
+curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-home.html https://chay.occochi.ru/
+curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-kp.html https://chay.occochi.ru/kp/
+grep -q '"service":"chay-api"' /tmp/chay-deploy-api.json
+grep -q 'assets/js/api.js' /tmp/chay-deploy-home.html
+grep -q '30 000' /tmp/chay-deploy-kp.html
 
 trap - ERR
 echo "DEPLOY=ok"
