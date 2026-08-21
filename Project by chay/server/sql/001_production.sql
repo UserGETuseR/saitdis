@@ -169,4 +169,10 @@ insert into chay_guides(id,title,tag,body,position) values
   ('handoff','Передача смены','команда','Зафиксируйте незакрытые заказы, остатки ниже нормы, договорённости с гостями и любые происшествия.',40)
 on conflict (id) do update set title=excluded.title, tag=excluded.tag, body=excluded.body, position=excluded.position, updated_at=now();
 
+grant usage on schema public to chay_app;
+grant select, insert, update, delete on all tables in schema public to chay_app;
+grant usage, select on all sequences in schema public to chay_app;
+alter default privileges in schema public grant select, insert, update, delete on tables to chay_app;
+alter default privileges in schema public grant usage, select on sequences to chay_app;
+
 commit;
