@@ -15,7 +15,7 @@ const CORE = [
   "./img/icon.svg",
   "./img/icon-maskable.svg",
   "./assets/css/styles.css?v=12",
-  "./assets/css/revamp-2026.css?v=20260821.2",
+  "./assets/css/revamp-2026.css?v=20260821.3",
   "./assets/js/config.js",
   "./assets/js/data.teas.js",
   "./assets/js/data.mushrooms.js",
