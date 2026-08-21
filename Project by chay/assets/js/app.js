@@ -12,6 +12,7 @@ window.App = (function () {
     "/meditate": Views.meditate,
     "/brew": Views.brew,
     "/certificate": Views.certificate,
+    "/messages": Views.messages,
     "/team": Views.team,
     "/auth": Views.auth,
     "/client": Views.client,
@@ -26,6 +27,7 @@ window.App = (function () {
     "/master": (u) => u && u.role === "master",
     "/admin": (u) => u && (u.role === "admin" || u.role === "owner"),
     "/profile": (u) => !!u,
+    "/messages": (u) => !!u,
     "/passport": (u) => !!u,
     "/team": (u) => u && (u.role === "master" || u.role === "admin" || u.role === "owner"),
   };
@@ -67,6 +69,7 @@ window.App = (function () {
       med: { route: "/meditate", icon: "bi-wind", label: "Практики" },
       brew: { route: "/brew", icon: "bi-hourglass-split", label: "Заварить" },
       cert: { route: "/certificate", icon: "bi-gift", label: "Сертификат" },
+      messages: { route: "/messages", icon: "bi-chat-heart", label: "Связь" },
       team: { route: "/team", icon: "bi-chat-square-heart", label: "Команда" },
       pass: { route: "/passport", icon: "bi-patch-check", label: "Паспорт" },
       client: { route: "/client", icon: "bi-grid", label: "Кабинет" },
@@ -76,7 +79,7 @@ window.App = (function () {
     if (!u) return { links: [L.home, L.brew, L.menu, L.events, L.cert], tab: [L.home, L.brew, L.menu, L.events, L.cert] };
     if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.menu, L.events, L.med], tab: [L.admin, L.team, L.menu, L.events, L.med] };
     if (u.role === "master") return { links: [L.master, L.team, L.brew, L.menu, L.med], tab: [L.master, L.team, L.brew, L.menu, L.med] };
-    return { links: [L.client, L.brew, L.menu, L.events, L.cert, L.pass], tab: [L.client, L.brew, L.menu, L.cert, L.pass] };
+    return { links: [L.client, L.messages, L.brew, L.menu, L.cert, L.pass], tab: [L.client, L.messages, L.brew, L.cert, L.pass] };
   }
 
   function renderChrome(path) {

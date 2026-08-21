@@ -6,7 +6,7 @@
 //   • Внешние (шрифты Google, иконки CDN) — cache-first (офлайн после первого визита).
 // При смене версии меняй CACHE — старые кеши очищаются на activate.
 
-const CACHE = "cha-cache-v14";
+const CACHE = "cha-cache-v15";
 
 const CORE = [
   "./",
@@ -25,8 +25,8 @@ const CORE = [
   "./assets/js/data.events.js",
   "./assets/js/data.practices.js",
   "./assets/js/db.js",
-  "./assets/js/api.js?v=20260821.1",
-  "./assets/js/operations.js",
+  "./assets/js/api.js?v=20260821.2",
+  "./assets/js/operations.js?v=20260821.2",
   "./assets/js/inventory.js",
   "./assets/js/orders.js",
   "./assets/js/shifts.js",
@@ -35,8 +35,8 @@ const CORE = [
   "./assets/js/auth.cloud.js?v=20260821.1",
   "./assets/js/ui.js",
   "./assets/js/views.js",
-  "./assets/js/views.next.js?v=20260821.1",
-  "./assets/js/app.js?v=20260821.1",
+  "./assets/js/views.next.js?v=20260821.2",
+  "./assets/js/app.js?v=20260821.2",
   "./img/matcha-lineup-v1.png",
 ];
 

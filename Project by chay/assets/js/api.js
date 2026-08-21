@@ -8,7 +8,7 @@ window.ApiClient = (function () {
   const listeners = [];
   const pending = new Map();
   const STAFF_COLLECTIONS = ["messages", "staff_requests", "shift_reports", "service_guides", "inventory", "orders", "shifts", "certificates"];
-  const CLIENT_COLLECTIONS = ["orders", "certificates"];
+  const CLIENT_COLLECTIONS = ["orders", "certificates", "messages"];
 
   function emit(extra) { listeners.forEach((fn) => { try { fn({ state, ready, ...extra }); } catch (_) {} }); }
   function setState(next, extra) { state = next; emit(extra); }

@@ -36,6 +36,7 @@ create index if not exists chay_sessions_user on chay_sessions(user_id, expires_
 create table if not exists chay_messages (
   id text primary key,
   from_id text references chay_users(id) on delete set null,
+  target_id text references chay_users(id) on delete set null,
   from_name text not null,
   from_role text not null,
   audience text not null check (audience in ('team','master','admin','owner','management','client')),
@@ -47,7 +48,9 @@ create table if not exists chay_messages (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_messages add column if not exists target_id text references chay_users(id) on delete set null;
 create index if not exists chay_messages_created on chay_messages(created_at desc);
+create index if not exists chay_messages_target on chay_messages(target_id, created_at desc);
 
 create table if not exists chay_staff_requests (
   id text primary key,

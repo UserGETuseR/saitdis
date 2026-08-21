@@ -21,15 +21,15 @@ window.Operations = (function () {
   }
 
   function user() { return Auth.current(); }
-  function sendMessage({ audience, text, subject }) {
+  function sendMessage({ audience, targetId, text, subject }) {
     const u = user();
     if (!u || !String(text || "").trim()) return null;
-    return messages.insert({ fromId: u.id, fromName: u.name, fromRole: u.role, audience, subject: subject || "Диалог", text: String(text).trim(), readBy: [u.id], status: "open" });
+    return messages.insert({ fromId: u.id, targetId: targetId || null, fromName: u.name, fromRole: u.role, audience, subject: subject || "Диалог", text: String(text).trim(), readBy: [u.id], status: "open" });
   }
   function inbox() {
     const u = user();
     if (!u) return [];
-    return messages.all().filter((m) => m.fromId === u.id || m.audience === "team" || m.audience === u.role || (u.role === "admin" && m.audience === "management")).sort((a, b) => b.createdAt - a.createdAt);
+    return messages.all().filter((m) => m.fromId === u.id || m.targetId === u.id || (u.role !== "client" && m.audience === "team") || m.audience === u.role || (["admin","owner"].includes(u.role) && m.audience === "management")).sort((a, b) => b.createdAt - a.createdAt);
   }
   function createRequest({ type, title, details, urgency }) {
     const u = user();
