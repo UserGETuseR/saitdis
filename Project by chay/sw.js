@@ -6,7 +6,7 @@
 //   • Внешние (шрифты Google, иконки CDN) — cache-first (офлайн после первого визита).
 // При смене версии меняй CACHE — старые кеши очищаются на activate.
 
-const CACHE = "cha-cache-v15";
+const CACHE = "cha-cache-v18";
 
 const CORE = [
   "./",
@@ -15,7 +15,7 @@ const CORE = [
   "./img/icon.svg",
   "./img/icon-maskable.svg",
   "./assets/css/styles.css?v=12",
-  "./assets/css/revamp-2026.css?v=20260821.3",
+  "./assets/css/revamp-2026.css?v=20260821.6",
   "./assets/js/config.js",
   "./assets/js/data.teas.js",
   "./assets/js/data.mushrooms.js",
@@ -35,7 +35,7 @@ const CORE = [
   "./assets/js/auth.cloud.js?v=20260821.1",
   "./assets/js/ui.js",
   "./assets/js/views.js",
-  "./assets/js/views.next.js?v=20260821.2",
+  "./assets/js/views.next.js?v=20260821.4",
   "./assets/js/app.js?v=20260821.2",
   "./img/matcha-lineup-v1.png",
 ];

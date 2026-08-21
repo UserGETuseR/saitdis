@@ -28,7 +28,7 @@
         <div class="matcha-lineup">${window.MATCHA_DRINKS.map((d, i) => `<article class="matcha-card tone-${d.tone}"><div class="matcha-shot shot-${i}"></div><span>0${i + 1}</span><h3>${d.name}</h3><p>${d.comp}</p><div><b>${UI.rub(d.price)}</b><button data-item="${d.id}" aria-label="Добавить ${d.name}">↘</button></div></article>`).join("")}</div>
       </section>
 
-      <section class="wrap story-bridge"><div class="ded-large">${UI.dedMark("home-next", "")}</div><div><span class="section-tag">Чайный Дед рядом</span><h2>Обычный чай<br>не нуждается<br>в спецэффектах.</h2><p>Ему нужны хороший лист, вода, внимание и история, которую хочется передать дальше.</p><button class="btn ghost" data-go="#/menu">Смотреть чайную карту</button></div></section>
+      <section class="wrap story-bridge"><div class="ded-large">${UI.dedMark("home-next", "")}</div><div><span class="section-tag">Чайный Дед рядом</span><h2>Обычный чай<br>не нуждается<br><span class="bridge-nowrap">в спецэффектах.</span></h2><p>Ему нужны хороший лист, вода, внимание и история, которую хочется передать дальше.</p><button class="btn ghost" data-go="#/menu">Смотреть чайную карту</button></div></section>
 
       <section class="wrap gift-call"><span>Подарить не вещь, а время</span><h2>Сертификат<br>на чайную историю.</h2><button class="btn primary" data-go="#/certificate">Выбрать сертификат</button></section>`;
     return { html, mount(root) { goMount(root); root.querySelectorAll("[data-item]").forEach((b) => b.addEventListener("click", () => App.addMenuItem(b.dataset.item))); } };
