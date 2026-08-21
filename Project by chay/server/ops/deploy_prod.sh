@@ -10,15 +10,23 @@ PROJECT_DIR="$SOURCE_DIR/Project by chay"
 SHA="$(git -C "$SOURCE_DIR" rev-parse --short HEAD)"
 WEB_RELEASE="$WEB_ROOT/releases/$SHA"
 API_RELEASE="$API_ROOT/releases/$SHA"
-OLD_WEB="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
-OLD_API="$(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
+OLD_WEB=""
+OLD_API=""
+if [[ -L "$WEB_ROOT/current" ]]; then OLD_WEB="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"; fi
+if [[ -L "$API_ROOT/current" ]]; then OLD_API="$(readlink -f "$API_ROOT/current" 2>/dev/null || true)"; fi
 STAMP="$(date +%Y%m%d-%H%M%S)"
 NGINX_BACKUP="$NGINX_CONF.before-chay-api-$STAMP"
 
 rollback() {
   local code=$?
   if [[ -n "$OLD_WEB" && -d "$OLD_WEB" ]]; then ln -sfn "$OLD_WEB" "$WEB_ROOT/current"; fi
-  if [[ -n "$OLD_API" && -d "$OLD_API" ]]; then ln -sfn "$OLD_API" "$API_ROOT/current"; systemctl restart chay-api >/dev/null 2>&1 || true; fi
+  if [[ -n "$OLD_API" && -d "$OLD_API" ]]; then
+    ln -sfn "$OLD_API" "$API_ROOT/current"
+    systemctl restart chay-api >/dev/null 2>&1 || true
+  elif [[ -L "$API_ROOT/current" ]]; then
+    unlink "$API_ROOT/current"
+    systemctl stop chay-api >/dev/null 2>&1 || true
+  fi
   if [[ -f "$NGINX_BACKUP" ]]; then cp -a "$NGINX_BACKUP" "$NGINX_CONF"; nginx -t >/dev/null 2>&1 && systemctl reload nginx || true; fi
   echo "DEPLOY=rolled-back"
   exit "$code"
@@ -117,9 +125,9 @@ nginx -t
 ln -sfn "$WEB_RELEASE" "$WEB_ROOT/current"
 systemctl reload nginx
 
-curl -fsS https://chay.occochi.ru/api/health | grep -q '"service":"chay-api"'
-curl -fsS https://chay.occochi.ru/ | grep -q 'assets/js/api.js'
-curl -fsS https://chay.occochi.ru/kp/ | grep -q '30 000'
+curl -fsS --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/api/health | grep -q '"service":"chay-api"'
+curl -fsS --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/ | grep -q 'assets/js/api.js'
+curl -fsS --resolve chay.occochi.ru:443:127.0.0.1 https://chay.occochi.ru/kp/ | grep -q '30 000'
 
 trap - ERR
 echo "DEPLOY=ok"
