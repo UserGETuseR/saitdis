@@ -1,0 +1,130 @@
+/* Чайная история · production brand layer 2026
+   Source of truth: /БРЕНБУК. This layer intentionally removes the former
+   glossy/gradient visual language without changing the working application. */
+:root{
+  --cream:#F4ECD8;--ink:#0E0E0E;--milk:#E8DDC2;--terra:#B85C2C;
+  --sage:#5A7560;--hvoya:#2E3F35;--paper:var(--cream);--panel:var(--milk);
+  --panel-2:var(--cream);--text:var(--ink);--text-dim:rgba(14,14,14,.58);
+  --muted:rgba(14,14,14,.58);--accent:var(--terra);--accent-soft:var(--terra);
+  --ember:var(--terra);--gold:var(--terra);--line:rgba(14,14,14,.18);
+  --line-soft:rgba(14,14,14,.08);--display:'Unbounded',sans-serif;
+  --sans:'Manrope',system-ui,sans-serif;--serif:'PT Serif',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;--r:4px;--radius:4px;
+}
+*{scrollbar-color:var(--terra) var(--milk)}
+html{background:var(--cream)}
+body{background:var(--cream);color:var(--ink);font-family:var(--sans);letter-spacing:0}
+body::before{content:"";position:fixed;inset:0;z-index:-2;background:var(--cream)}
+body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:url("../../БРЕНБУК/assets/pattern-real-muted.png");background-size:520px auto;opacity:.035}
+button,input,select,textarea{font:inherit}
+h1,h2,h3,h4,.logo-text,.foot-brand-name{font-family:var(--display);letter-spacing:-.035em}
+em{font-family:var(--serif);font-weight:400}
+.muted{color:var(--text-dim)!important}
+
+/* Brand chrome */
+.topbar{top:0;max-width:none;margin:0;padding:12px clamp(18px,4vw,64px);height:86px;background:rgba(244,236,216,.96);border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none;backdrop-filter:blur(10px);color:var(--ink)}
+.logo{min-width:220px;gap:12px;color:var(--ink)}
+.logo .ded-mark{display:none}
+.logo::before{content:"";width:58px;height:58px;display:block;flex:none;background:url("../../БРЕНБУК/assets/logo-color.png") center/contain no-repeat}
+.logo-text{font-size:14px;line-height:1.02;text-transform:none}
+.nav-links a,.nav-user,.login-btn,.cart-btn{color:var(--ink)!important;border-radius:2px!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important}
+.nav-links a{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;padding:10px 12px}
+.nav-links a.active,.nav-links a:hover{color:var(--terra)!important;border-bottom:1px solid var(--terra)!important}
+.sync-state{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);border:1px solid var(--line);border-radius:999px;padding:7px 10px}
+.sync-state i{background:var(--sage)}
+.cart-btn{border:1px solid var(--line)!important;width:44px;height:44px}
+.cart-count{background:var(--terra)!important;color:var(--cream)!important}
+
+/* Buttons and controls */
+.btn,.work-list button,.cert-actions button,.team-shell button,.matcha-card button{border-radius:2px!important;box-shadow:none!important;font-family:var(--sans);font-weight:700;transition:opacity .15s ease,background .15s ease,color .15s ease,border-color .15s ease,transform .15s ease}
+.btn:hover,.work-list button:hover,.team-shell button:hover{transform:none!important;opacity:.86}
+.btn.primary{background:var(--terra)!important;color:var(--cream)!important;border:1px solid var(--terra)!important}
+.btn.ghost,.btn.small,.work-list button,.team-shell button{background:transparent!important;color:var(--ink)!important;border:1px solid var(--line)!important}
+input,textarea,select{background:var(--cream)!important;color:var(--ink)!important;border:1px solid var(--line)!important;border-radius:2px!important;box-shadow:none!important}
+input:focus,textarea:focus,select:focus{outline:2px solid rgba(184,92,44,.2)!important;border-color:var(--terra)!important}
+.section-tag,.story-kicker{font-family:var(--mono)!important;font-size:10px!important;text-transform:uppercase;letter-spacing:.09em;color:var(--text-dim)!important}
+.section-tag::before,.story-kicker::before{content:"▸ ";color:var(--terra)}
+.section-tag i,.story-kicker i{display:none!important}
+
+/* Landing */
+.story-hero{min-height:calc(100svh - 86px);padding:clamp(60px,8vw,120px) clamp(24px,7vw,120px);display:grid;grid-template-columns:minmax(0,1.12fr) minmax(300px,.88fr);align-items:center;gap:clamp(36px,7vw,120px);background:var(--cream)!important;color:var(--ink);border-bottom:1px solid var(--line);overflow:hidden}
+.story-hero::before{content:"";position:absolute;right:-4%;top:0;width:51%;height:100%;background:var(--milk) url("../../БРЕНБУК/assets/pattern-real-muted.png") center/580px auto;opacity:.82;clip-path:polygon(15% 0,100% 0,100% 100%,0 100%)}
+.story-hero-noise,.story-orbit{display:none!important}
+.story-copy{position:relative;z-index:2;max-width:830px}
+.story-copy h1{margin:28px 0 28px;font-family:var(--display);font-weight:800;font-size:clamp(52px,7.6vw,126px);line-height:.91;letter-spacing:-.06em;color:var(--ink)}
+.story-copy h1 em{display:inline;color:var(--terra);font-size:.88em;letter-spacing:-.045em}
+.story-copy p{max-width:650px;font-size:clamp(16px,1.4vw,21px);line-height:1.55;color:var(--text-dim)}
+.story-actions{margin-top:34px;display:flex;gap:10px;flex-wrap:wrap}
+.story-cup-stage{position:relative;z-index:2;min-height:620px;display:grid;place-items:center;background:none!important;filter:none!important}
+.story-cup-stage::before{content:"";position:absolute;inset:4% 8% 13%;background:url("../../БРЕНБУК/assets/logo-color.png") center/contain no-repeat;filter:none}
+.story-cup-stage img{display:none!important}
+.cup-note{left:auto!important;right:4%!important;bottom:9%!important;max-width:240px;padding:18px 20px!important;background:var(--cream)!important;color:var(--ink)!important;border:1px solid var(--line)!important;border-radius:2px!important;box-shadow:none!important;font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.cup-note b{display:block;font-family:var(--display);font-size:15px;text-transform:none;letter-spacing:-.03em;margin-bottom:4px}
+.story-index{right:clamp(18px,3vw,50px)!important;bottom:24px!important;font-family:var(--mono)!important;color:var(--text-dim)!important}
+.ritual-intro,.matcha-stage,.story-bridge,.gift-call{max-width:none!important;margin:0!important;padding:clamp(80px,10vw,150px) clamp(24px,7vw,120px)!important;border-bottom:1px solid var(--line)}
+.ritual-intro{background:var(--ink);color:var(--cream)}
+.ritual-intro h2,.ritual-intro p,.ritual-intro b{color:var(--cream)!important}
+.ritual-intro .section-tag{color:rgba(244,236,216,.56)!important}
+.ritual-path{border-color:rgba(244,236,216,.2)!important}
+.ritual-path span{font-family:var(--mono);color:var(--terra)!important}
+.matcha-stage{background:var(--cream)}
+.matcha-heading h2,.story-bridge h2,.gift-call h2{font-family:var(--display)!important;font-weight:700;letter-spacing:-.05em;color:var(--ink)}
+.matcha-lineup{gap:0!important;border:1px solid var(--line);background:var(--line)}
+.matcha-card{margin:0!important;border:0!important;border-radius:0!important;background:var(--cream)!important;color:var(--ink)!important;box-shadow:none!important}
+.matcha-card:nth-child(2){background:var(--milk)!important}
+.matcha-card:hover{transform:none!important}
+.matcha-shot{border-radius:2px!important;box-shadow:none!important;background-color:var(--milk)!important}
+.matcha-card p{color:var(--text-dim)!important}
+.matcha-card button{background:var(--terra)!important;color:var(--cream)!important;border:1px solid var(--terra)!important}
+.story-bridge{background:var(--milk);display:grid!important;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr)!important}
+.story-bridge .ded-large{min-height:520px;background:url("../../БРЕНБУК/assets/logo-color.png") center/contain no-repeat}
+.story-bridge .ded-large>*{display:none}
+.gift-call{background:var(--terra)!important;color:var(--cream)!important;text-align:left!important;position:relative;overflow:hidden}
+.gift-call::after{content:"茶";position:absolute;right:5%;top:50%;transform:translateY(-50%);font:900 clamp(160px,26vw,430px)/1 'Noto Sans SC',sans-serif;color:rgba(244,236,216,.12)}
+.gift-call h2{color:var(--cream)!important;position:relative;z-index:1}
+.gift-call .btn{position:relative;z-index:1;background:var(--cream)!important;color:var(--ink)!important;border-color:var(--cream)!important}
+
+/* Application surfaces */
+.wrap{max-width:1360px}
+.hero,.dash-hero,.team-hero,.menu-intro,.brew-hero,.gift-hero{background:var(--ink)!important;color:var(--cream)!important;border-radius:0!important;box-shadow:none!important}
+.hero::before,.dash-hero::before,.team-hero::before,.menu-intro::before,.brew-hero::before,.gift-hero::before{background-image:url("../../БРЕНБУК/assets/pattern-real-muted.png")!important;background-size:520px!important;opacity:.07!important}
+.hero h1,.dash-hero h1,.team-hero h1,.menu-intro h1,.brew-hero h1,.gift-hero h1{font-family:var(--display)!important;font-weight:700;color:var(--cream)!important}
+.hero em,.dash-hero em,.team-hero em,.menu-intro em,.brew-hero em,.gift-hero em{color:#E3A27F!important}
+.card,.tea-card,.dash-card,.stat,.loyalty,.work-form,.work-list,.guide-grid article,.certificate-flow-card,.gift-form,.gift-preview,.brew-picker,.brew-story,.brew-timer,.menu-ded,.cart,.modal-card{background:var(--cream)!important;color:var(--ink)!important;border:1px solid var(--line)!important;border-radius:4px!important;box-shadow:none!important;backdrop-filter:none!important}
+.dash-grid,.team-grid,.guide-grid{gap:1px!important;background:var(--line);border:1px solid var(--line)}
+.dash-grid>* ,.team-grid>* ,.guide-grid>*{border:0!important;border-radius:0!important}
+.stat,.loyalty{background:var(--milk)!important}
+.client-loyalty-card{margin:28px 0 44px;display:grid;grid-template-columns:1fr auto;gap:28px 50px;align-items:center;padding:clamp(26px,4vw,54px);background:var(--hvoya);color:var(--cream);border:1px solid var(--hvoya);border-radius:4px;position:relative;overflow:hidden}
+.client-loyalty-card::after{content:"道";position:absolute;right:-20px;bottom:-70px;font:900 220px/1 'Noto Sans SC',sans-serif;color:rgba(244,236,216,.06)}
+.client-loyalty-card h2{margin:14px 0 12px;font-size:clamp(28px,4vw,54px);line-height:1;color:var(--cream)}
+.client-loyalty-card p{color:rgba(244,236,216,.68)}
+.loyalty-seal{position:relative;z-index:1;width:130px;height:130px;border:1px solid rgba(244,236,216,.35);display:grid;place-content:center;text-align:center;transform:rotate(3deg)}
+.loyalty-seal span{font:700 44px/1 var(--display)}.loyalty-seal small{margin-top:8px;font:10px/1.3 var(--mono);text-transform:uppercase;letter-spacing:.08em}
+.loyalty-track{grid-column:1/-1;display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:rgba(244,236,216,.22);border:1px solid rgba(244,236,216,.22);position:relative;z-index:1}
+.loyalty-track i{height:66px;display:grid;place-items:center;background:var(--hvoya);font:500 12px var(--mono);font-style:normal;color:rgba(244,236,216,.38)}
+.loyalty-track i.on{background:var(--terra);color:var(--cream)}
+.stamps{gap:6px}
+.stamp{border-radius:2px!important;border-style:solid!important}
+.stamp.on{background:var(--terra)!important;color:var(--cream)!important;border-color:var(--terra)!important}
+#teamTabs{border-bottom:1px solid var(--line);gap:0!important}
+#teamTabs button{border:0!important;border-bottom:2px solid transparent!important;border-radius:0!important}
+#teamTabs button.active{color:var(--terra)!important;border-bottom-color:var(--terra)!important}
+.tabbar{background:rgba(244,236,216,.98)!important;border-top:1px solid var(--line)!important;box-shadow:none!important}
+.tabbar a{color:var(--text-dim)!important}.tabbar a.active{color:var(--terra)!important}
+.foot{background:var(--ink)!important;color:var(--cream)!important;border-radius:0!important}
+.foot .ded-mark{display:none}.foot-brand::before{content:"";display:block;width:110px;height:110px;background:url("../../БРЕНБУК/assets/logo-cream-on-dark.png") center/contain no-repeat;margin-bottom:14px}
+.foot-apps,.store-badge{border-radius:2px!important}
+.splash{background:var(--cream)!important}.splash-inner{background:url("../../БРЕНБУК/assets/logo-color.png") center/180px no-repeat}.splash-inner>*{visibility:hidden}
+
+@media(max-width:900px){
+  .topbar{height:74px;padding:8px 14px}.logo{min-width:0}.logo::before{width:48px;height:48px}.logo-text{font-size:11px}.sync-state{display:none}
+  .story-hero{min-height:auto;padding:70px 20px 46px;grid-template-columns:1fr}.story-hero::before{right:-36%;width:100%;opacity:.34}.story-copy h1{font-size:clamp(46px,14vw,72px);margin:20px 0}.story-copy p{font-size:16px}.story-actions .btn{flex:1;justify-content:center;min-width:150px}
+  .story-cup-stage{min-height:390px}.story-cup-stage::before{inset:0 8% 5%}.cup-note{right:0!important;bottom:0!important}.story-index{display:none}
+  .ritual-intro,.matcha-stage,.story-bridge,.gift-call{padding:72px 20px!important}.ritual-intro,.story-bridge{grid-template-columns:1fr!important}.story-bridge .ded-large{min-height:380px}
+  .matcha-lineup{display:flex!important;overflow-x:auto;scroll-snap-type:x mandatory}.matcha-card{min-width:84vw!important;scroll-snap-align:start}.matcha-shot{height:360px!important}
+  .dash-grid,.team-grid,.guide-grid{display:block!important;background:transparent;border:0}.dash-grid>*,.team-grid>*,.guide-grid>*{border:1px solid var(--line)!important;margin-bottom:10px}
+  .client-loyalty-card{grid-template-columns:1fr;padding:28px 20px;gap:20px}.loyalty-seal{width:100px;height:100px}.loyalty-track{gap:0}.loyalty-track i{height:48px}
+  .tabbar{padding-bottom:calc(6px + env(safe-area-inset-bottom))!important}.tabbar a{font-size:9px!important}
+}
+
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

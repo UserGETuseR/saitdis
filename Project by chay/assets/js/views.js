@@ -112,11 +112,8 @@ Views.alchemist = (function () {
       ] },
     { key: "effect", title: "Какой эффект усилить грибом?", sub: "Функциональный адаптоген — сердце эликсира",
       options: [
-        { value: "focus", icon: "bi-bullseye", label: "Фокус", desc: "Львиная грива" },
-        { value: "calm", icon: "bi-moon-stars", label: "Спокойствие", desc: "Рейши" },
+        { value: "focus", icon: "bi-bullseye", label: "Фокус", desc: "Ежовик" },
         { value: "energy", icon: "bi-lightning-charge", label: "Энергия", desc: "Кордицепс" },
-        { value: "immunity", icon: "bi-shield-shaded", label: "Иммунитет", desc: "Чага" },
-        { value: "balance", icon: "bi-yin-yang", label: "Баланс", desc: "Трутовик" },
       ] },
   ];
 
@@ -157,7 +154,7 @@ Views.alchemist = (function () {
   function stepHTML() {
     const q = QUESTIONS[step];
     return `
-      <div class="section-tag center">Чайный Алхимик</div>
+      <div class="section-tag center">Подбор Чайного мастера</div>
       <div class="progress">${QUESTIONS.map((_, i) => `<i class="${i <= step ? "on" : ""}"></i>`).join("")}</div>
       <div class="step-title">${q.title}</div>
       <p class="step-sub">${q.sub}</p>
@@ -1061,6 +1058,9 @@ Views.client = function () {
   const lastPick = s.history[0];
   const lastTea = lastPick ? UI.teaById(lastPick.tea) : null;
   const myOrders = (window.Orders ? Orders.forUser(u.id) : []).slice(0, 5);
+  const myCertificates = (window.Operations ? Operations.visibleCertificates() : []).slice(0, 5);
+  const certificateLabels = {new:"Заявка получена",contacted:"Команда связалась",awaiting_payment:"Ожидаем оплату",confirmed:"Оплата подтверждена",issued:"Сертификат выпущен",redeemed:"Использован",cancelled:"Отменён"};
+  const certificateSteps = ["new","contacted","awaiting_payment","confirmed","issued","redeemed"];
 
   const html = `
     <header class="dash-hero client-hero">
@@ -1069,7 +1069,7 @@ Views.client = function () {
         ${UI.avatar(u, 64)}
         <div>
           <div class="brand-mark" style="margin:0 0 4px">Кабинет гостя</div>
-          <h1 class="dash-name">Здравствуй, ${u.name}</h1>
+          <h1 class="dash-name">Добро пожаловать, ${u.name}</h1>
           <div class="rank-line"><i class="bi ${rank.icon}"></i> ${rank.name}</div>
         </div>
       </div>
@@ -1084,11 +1084,17 @@ Views.client = function () {
         <div class="spirit"><div class="si"><i class="bi bi-cup-hot"></i></div><div class="sv">${s.stamps}</div><div class="sk">чашек</div></div>
       </div>
 
+      <section class="client-loyalty-card">
+        <div><span class="section-tag">Карта лояльности</span><h2>Каждая чашка<br>остаётся в истории.</h2><p>${s.stamps % 6 ? `До следующего подарка — ${6 - (s.stamps % 6)}.` : s.stamps ? "Подарок уже ждёт вас. Покажите карту чайному мастеру." : "Первая отметка появится после готового заказа."}</p></div>
+        <div class="loyalty-seal"><span>${s.stamps}</span><small>всего отметок</small></div>
+        <div class="loyalty-track">${Array.from({length:6},(_,i)=>`<i class="${i<(s.stamps%6)||s.stamps>0&&s.stamps%6===0?"on":""}">${i===5?"茶":i+1}</i>`).join("")}</div>
+      </section>
+
       <div class="dash-grid">
         <div class="dash-card accent">
           <div class="dc-head"><i class="bi bi-moon-stars"></i> Твой эликсир дня</div>
-          ${lastTea ? `<p>Прошлый выбор — <b>${lastTea.name}</b>. Готов открыть новый вкус?</p>` : `<p>Алхимик ещё не знает тебя. Соберём первый эликсир?</p>`}
-          <button class="btn primary" data-go="#/alchemist"><i class="bi bi-stars"></i> Призвать Алхимика</button>
+          ${lastTea ? `<p>Предыдущая глава — <b>${lastTea.name}</b>. Откроем следующий вкус?</p>` : `<p>Начнём с первого спокойного подбора.</p>`}
+          <button class="btn primary" data-go="#/alchemist"><i class="bi bi-stars"></i> Подобрать чай</button>
         </div>
         <div class="dash-card">
           <div class="dc-head"><i class="bi bi-wind"></i> Практика на сегодня</div>
@@ -1111,14 +1117,25 @@ Views.client = function () {
           <div class="oc-items">${items}</div>
           <div class="oc-foot"><span class="price">${UI.rub(o.total)}</span></div>
         </div>`;
-      }).join("")}</div>` : `<p class="muted">Заказов пока нет. Загляни в меню или к Алхимику.</p>`}
+      }).join("")}</div>` : `<p class="muted">Заказов пока нет. Откройте чайную карту или подбор.</p>`}
+
+      <h3 class="cat-h"><i class="bi bi-gift"></i> Мои сертификаты</h3>
+      ${myCertificates.length ? `<div class="client-certificates">${myCertificates.map((c) => {
+        const current = Math.max(0, certificateSteps.indexOf(c.status));
+        return `<article class="client-certificate ${c.status}">
+          <div class="client-cert-top"><span>${c.code}</span><b>${UI.rub(c.amount)}</b></div>
+          <h4>${c.recipientName}</h4><p>${certificateLabels[c.status] || c.status}</p>
+          <div class="certificate-track">${certificateSteps.map((step, i) => `<i class="${i < current ? "done" : i === current ? "current" : ""}" title="${certificateLabels[step]}"></i>`).join("")}</div>
+          ${c.status === "issued" ? `<small>Сохраните код — он понадобится при посещении чайной.</small>` : c.contactNote ? `<small>${c.contactNote}</small>` : ""}
+        </article>`;
+      }).join("")}</div>` : `<div class="empty-action"><p class="muted">Заявок пока нет. Можно подарить чайную историю за пару минут.</p><button class="btn ghost" data-go="#/certificate"><i class="bi bi-gift"></i> Выбрать сертификат</button></div>`}
 
       <h3 class="cat-h"><i class="bi bi-clock-history"></i> Последние подборы</h3>
       ${s.history.length ? `<div class="history">${s.history.slice(0, 5).map((h) => {
         const t = UI.teaById(h.tea), m = h.mushroom ? UI.mushroomById(h.mushroom) : null;
         const d = new Date(h.ts);
         return `<div class="hist-row"><span class="hist-tea">${t ? t.name : "—"}${m ? ` <span class="hist-x">×</span> ${m.name} <i class="bi ${m.icon}"></i>` : ""}</span><span class="hist-date">${d.toLocaleDateString("ru-RU")}</span></div>`;
-      }).join("")}</div>` : `<p class="muted">Пока пусто — призови Алхимика.</p>`}
+      }).join("")}</div>` : `<p class="muted">Пока пусто — начните с первого подбора.</p>`}
     </section>`;
   return {
     html,

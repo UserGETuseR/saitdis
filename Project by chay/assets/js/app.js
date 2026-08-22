@@ -61,7 +61,7 @@ window.App = (function () {
     const u = Auth.current();
     const L = {
       home: { route: "/", icon: "bi-house-door", label: "Главная" },
-      alch: { route: "/alchemist", icon: "bi-moon-stars", label: "Алхимик" },
+      alch: { route: "/alchemist", icon: "bi-moon-stars", label: "Подбор" },
       elx: { route: "/elixirs", icon: "bi-droplet-half", label: "Эликсиры" },
       menu: { route: "/menu", icon: "bi-cup-hot", label: "Меню" },
       events: { route: "/events", icon: "bi-calendar-event", label: "Афиша" },
@@ -189,7 +189,7 @@ window.App = (function () {
         <div class="picker">
           <button class="pick-mush none" data-pick=""><i class="bi bi-cup-hot pm-glyph"></i><span class="pm-name">Без гриба</span><small>чистый чай · ${UI.rub(tea.price)}</small></button>
           ${window.MUSHROOMS.map((m) => `
-            <button class="pick-mush" data-pick="${m.id}" style="--mc:${m.color}">
+            <button class="pick-mush" data-pick="${m.id}" ${m.id === "amanita" ? 'data-consult="1"' : ""} style="--mc:${m.color}">
               <i class="bi ${m.icon} pm-glyph"></i>
               <span class="pm-name">${m.name}</span>
               <small>${window.EFFECTS[m.effectKey].label} · +${UI.rub(m.price)}</small>
@@ -201,6 +201,12 @@ window.App = (function () {
     modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
     modal.querySelectorAll("[data-pick]").forEach((b) =>
       b.addEventListener("click", () => {
+        if (b.dataset.consult) {
+          closeModal();
+          if (Auth.current()) UI.navigate("#/messages");
+          else { UI.toast("Для консультации войдите в кабинет гостя"); UI.navigate("#/auth"); }
+          return;
+        }
         addElixir(teaId, b.dataset.pick || null);
         closeModal();
       })
@@ -218,7 +224,7 @@ window.App = (function () {
     const body = document.getElementById("cartBody");
     if (!body) return;
     if (!s.cart.length) {
-      body.innerHTML = `<p class="muted center" style="padding:40px 0">Чашка пуста.<br/>Загляни в меню или к Алхимику.</p>`;
+      body.innerHTML = `<p class="muted center" style="padding:40px 0">Чашка пуста.<br/>Откройте меню или подбор.</p>`;
     } else {
       body.innerHTML = s.cart.map((item, i) => {
         const t = item.teaId ? UI.teaById(item.teaId) : null;
@@ -275,8 +281,10 @@ window.App = (function () {
     if (window.Inventory && (!Auth.isCloud() || Auth.isStaff())) Inventory.seedIfEmpty();
     const cur = Auth.current();
     Store.useUser(cur ? cur.id : null);
+    if(cur&&ApiClient.isReady())ApiClient.loyalty.me().then((result)=>Store.setLoyalty(result.loyalty)).catch(()=>{});
     Auth.subscribe((user) => {
       Store.useUser(user ? user.id : null);
+      if(user&&ApiClient.isReady())ApiClient.loyalty.me().then((result)=>Store.setLoyalty(result.loyalty)).catch(()=>{});
       updateCartBadge();
     });
 

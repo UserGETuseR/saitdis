@@ -9,6 +9,15 @@ window.Operations = (function () {
 
   const ROLE_LABEL = { master: "чайному мастеру", admin: "управляющей", owner: "директору" };
   const REQUEST_FLOW = { master: "admin", admin: "owner", owner: "owner" };
+  const CERTIFICATE_STATUS = {
+    new: "Заявка получена",
+    contacted: "Команда связалась",
+    awaiting_payment: "Ожидаем оплату",
+    confirmed: "Оплата подтверждена",
+    issued: "Сертификат выпущен",
+    redeemed: "Сертификат использован",
+    cancelled: "Заявка отменена",
+  };
 
   function seedGuides() {
     if (guides.count()) return;
@@ -60,17 +69,35 @@ window.Operations = (function () {
   }
   function createCertificate({ buyerName, recipientName, phone, amount, wish }) {
     const u = user();
-    const rec = certificates.insert({ buyerId: u ? u.id : null, buyerName: String(buyerName || (u && u.name) || "Гость").trim(), recipientName: String(recipientName || "").trim(), phone: String(phone || "").trim(), amount: Number(amount), wish: String(wish || "").trim(), status: "new", code: "CHI-" + Math.random().toString(36).slice(2, 8).toUpperCase() });
+    const now = Date.now();
+    const rec = certificates.insert({ buyerId: u ? u.id : null, buyerName: String(buyerName || (u && u.name) || "Гость").trim(), recipientName: String(recipientName || "").trim(), phone: String(phone || "").trim(), amount: Number(amount), wish: String(wish || "").trim(), status: "new", statusHistory: [{ status: "new", at: now, by: u ? u.name : "Гость" }], updatedAt: now, code: "CHI-" + Math.random().toString(36).slice(2, 8).toUpperCase() });
     messages.insert({ fromId: rec.buyerId, fromName: rec.buyerName, fromRole: u ? u.role : "client", audience: "team", subject: "Новый сертификат", text: `Сертификат ${rec.code} на ${rec.amount} ₽ · телефон ${rec.phone}`, readBy: [], status: "open", entityId: rec.id });
     return rec;
   }
   function visibleCertificates() {
     const u = user();
     if (!u) return certificates.all().filter(() => false);
-    return certificates.all().filter((c) => c.buyerId === u.id || u.role === "master" || u.role === "admin").sort((a, b) => b.createdAt - a.createdAt);
+    return certificates.all().filter((c) => c.buyerId === u.id || ["master", "admin", "owner"].includes(u.role)).sort((a, b) => b.createdAt - a.createdAt);
   }
-  function setCertificateStatus(id, status) { return certificates.update(id, { status }); }
+  function setCertificateStatus(id, status, contactNote) {
+    const u = user(), current = certificates.byId(id);
+    if (!u || !current || !CERTIFICATE_STATUS[status]) return null;
+    const at = Date.now(), changed = current.status !== status;
+    const updated = certificates.update(id, {
+      status,
+      contactNote: String(contactNote || current.contactNote || "").trim(),
+      updatedAt: at,
+      statusHistory: changed ? [...(current.statusHistory || []), { status, at, by: u.name }] : (current.statusHistory || []),
+    });
+    if (changed && current.buyerId) messages.insert({
+      fromId: u.id, targetId: current.buyerId, fromName: u.name, fromRole: u.role,
+      audience: "client", subject: `Сертификат ${current.code}`,
+      text: `${CERTIFICATE_STATUS[status]}. ${status === "issued" ? `Код ${current.code} готов — сохраните его.` : "Статус обновлён в вашем кабинете."}`,
+      readBy: [u.id], status: "open", entityId: current.id,
+    });
+    return updated;
+  }
 
   seedGuides();
-  return { inbox, sendMessage, guides: () => guides.all(), createRequest, visibleRequests, setRequestStatus, createReport, visibleReports, createCertificate, visibleCertificates, setCertificateStatus };
+  return { inbox, sendMessage, guides: () => guides.all(), createRequest, visibleRequests, setRequestStatus, createReport, visibleReports, createCertificate, visibleCertificates, setCertificateStatus, certificateStatuses: CERTIFICATE_STATUS };
 })();

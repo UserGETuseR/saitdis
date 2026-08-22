@@ -96,12 +96,19 @@ create table if not exists chay_certificates (
   amount numeric(12,2) not null check (amount > 0),
   wish text not null default '',
   code citext not null unique,
-  status text not null default 'new' check (status in ('new','confirmed','issued','redeemed','cancelled')),
+  status text not null default 'new' check (status in ('new','contacted','awaiting_payment','confirmed','issued','redeemed','cancelled')),
+  contact_note text not null default '',
+  status_history jsonb not null default '[]'::jsonb,
   confirmed_by text references chay_users(id) on delete set null,
   confirmed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_certificates add column if not exists contact_note text not null default '';
+alter table chay_certificates add column if not exists status_history jsonb not null default '[]'::jsonb;
+alter table chay_certificates drop constraint if exists chay_certificates_status_check;
+alter table chay_certificates add constraint chay_certificates_status_check check (status in ('new','contacted','awaiting_payment','confirmed','issued','redeemed','cancelled'));
+update chay_certificates set status_history=jsonb_build_array(jsonb_build_object('status',status,'at',extract(epoch from created_at)*1000,'by','Система')) where jsonb_array_length(status_history)=0;
 create index if not exists chay_certificates_queue on chay_certificates(status, created_at desc);
 
 create table if not exists chay_guides (
@@ -135,11 +142,51 @@ create table if not exists chay_orders (
   status text not null default 'new' check (status in ('new','brewing','done','cancelled')),
   items jsonb not null default '[]'::jsonb,
   total numeric(12,2) not null default 0,
+  loyalty_credited_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_orders add column if not exists loyalty_credited_at timestamptz;
 create index if not exists chay_orders_queue on chay_orders(status, created_at desc);
 create index if not exists chay_orders_user on chay_orders(user_id, created_at desc);
+
+create table if not exists chay_loyalty_accounts (
+  user_id text primary key references chay_users(id) on delete cascade,
+  stamps int not null default 0 check (stamps >= 0),
+  rewards int not null default 0 check (rewards >= 0),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists chay_loyalty_events (
+  id text primary key default gen_random_uuid()::text,
+  user_id text not null references chay_users(id) on delete cascade,
+  delta int not null check (delta <> 0),
+  balance_after int not null check (balance_after >= 0),
+  kind text not null check (kind in ('order','manual','redeem','migration')),
+  source_key text unique,
+  note text not null default '',
+  actor_id text references chay_users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists chay_loyalty_events_user on chay_loyalty_events(user_id, created_at desc);
+
+create table if not exists chay_integration_outbox (
+  id bigserial primary key,
+  integration text not null default '1c',
+  event_type text not null,
+  entity_type text not null,
+  entity_id text not null,
+  payload jsonb not null,
+  idempotency_key text not null unique,
+  status text not null default 'pending' check (status in ('pending','processing','sent','failed')),
+  attempts int not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  last_error text,
+  sent_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists chay_outbox_queue on chay_integration_outbox(integration,status,next_attempt_at);
 
 create table if not exists chay_shifts (
   id text primary key,

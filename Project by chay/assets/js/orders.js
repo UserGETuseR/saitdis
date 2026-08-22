@@ -53,7 +53,9 @@ window.Orders = (function () {
       // списываем склад
       if (window.Inventory) snap.forEach((it) => Inventory.consumeForItem(it));
       // начисляем лояльность гостю (штампы, открытия, история)
-      if (window.Store && order.userId) Store.creditOrder(order.userId, snap);
+      // В production начисляет сервер только после статуса «Готов» — так одна
+      // чашка не превращается в две отметки после синхронизации.
+      if (window.Store && order.userId && !(window.Auth && Auth.isCloud && Auth.isCloud())) Store.creditOrder(order.userId, snap);
       return order;
     },
 

@@ -63,7 +63,10 @@ fi
 if ! sudo -u postgres psql -Atqc "select 1 from pg_database where datname='chay'" | grep -qx 1; then
   sudo -u postgres createdb -O chay_app chay
 fi
+ONEC_SAVED=""
+if [[ -f "$ENV_FILE" ]]; then ONEC_SAVED="$(grep -E '^ONEC_[A-Z_]+=' "$ENV_FILE" || true)"; fi
 printf 'PORT=4410\nDATABASE_URL=postgresql://chay_app:%s@127.0.0.1:5432/chay\nSESSION_DAYS=30\nTRUST_PROXY=1\n' "$DB_PASSWORD" > "$ENV_FILE"
+if [[ -n "$ONEC_SAVED" ]]; then printf '%s\n' "$ONEC_SAVED" >> "$ENV_FILE"; fi
 chown root:chay "$ENV_FILE"
 chmod 640 "$ENV_FILE"
 
@@ -109,7 +112,7 @@ create_initial_user teamaster master "Чайный мастер" MASTER
 
 if [[ ! -d "$WEB_RELEASE" ]]; then
   install -d "$WEB_RELEASE"
-  cp -a "$PROJECT_DIR/index.html" "$PROJECT_DIR/manifest.webmanifest" "$PROJECT_DIR/sw.js" "$PROJECT_DIR/assets" "$PROJECT_DIR/img" "$PROJECT_DIR/kp" "$WEB_RELEASE/"
+  cp -a "$PROJECT_DIR/index.html" "$PROJECT_DIR/manifest.webmanifest" "$PROJECT_DIR/sw.js" "$PROJECT_DIR/assets" "$PROJECT_DIR/img" "$PROJECT_DIR/kp" "$PROJECT_DIR/БРЕНБУК" "$WEB_RELEASE/"
 fi
 
 cp -a "$NGINX_CONF" "$NGINX_BACKUP"

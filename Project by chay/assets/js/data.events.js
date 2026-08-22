@@ -24,7 +24,7 @@ window.EVENTS = [
   {
     day: "Воскресенье", short: "Вс",
     items: [
-      { time: "14:00", name: "Чайная школа", icon: "bi-mortarboard", price: 1000, desc: "Основы чая, завaрки и церемонии" },
+      { time: "14:00", name: "Тихая дегустация", icon: "bi-cup-hot", price: 1000, desc: "Три главы чайной карты в спокойном ритме" },
       { time: "20:00", name: "Эмбиент вечер", icon: "bi-soundwave", desc: "Чай под медитативный эмбиент" },
     ],
   },

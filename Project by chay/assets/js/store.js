@@ -133,6 +133,13 @@ window.Store = (function () {
       st.history = st.history.slice(0, 30);
       if (isCurrent) { state = st; save(); } else { saveFor(userId, st); }
     },
+    setLoyalty(payload) {
+      if (!payload) return;
+      state.stamps = Number(payload.stamps) || 0;
+      state.loyaltyRewards = Number(payload.rewards) || 0;
+      state.loyaltyEvents = Array.isArray(payload.events) ? payload.events : [];
+      save();
+    },
 
     addJournal(entry) {
       state.journal.unshift(Object.assign({ ts: Date.now() }, entry));

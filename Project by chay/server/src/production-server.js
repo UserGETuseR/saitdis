@@ -4,6 +4,7 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 const { createRepository } = require("./repository");
 const { hashPassword, verifyPassword, newToken, tokenHash, privacyHash, parseCookies } = require("./security");
+const { createOneCIntegration } = require("./onec");
 
 const PORT = Number(process.env.PORT || 4410);
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -11,7 +12,9 @@ const SESSION_DAYS = Math.min(90, Math.max(1, Number(process.env.SESSION_DAYS ||
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
 
 const repo = createRepository(DATABASE_URL);
+const oneC = createOneCIntegration();
 const loginAttempts = new Map();
+const CERTIFICATE_STATUSES = new Set(["new","contacted","awaiting_payment","confirmed","issued","redeemed","cancelled"]);
 const STAFF = new Set(["master", "admin", "owner"]);
 const ADMIN = new Set(["admin", "owner"]);
 
@@ -160,6 +163,11 @@ async function route(req, res) {
   }
 
   if (req.method === "GET" && path === "/api/users") { requireRole(who,STAFF); return json(res,200,{ok:true,items:await repo.listUsers()}); }
+  if (req.method === "GET" && path === "/api/team") { requireActor(who); return json(res,200,{ok:true,items:await repo.publicTeam()}); }
+  if (req.method === "GET" && path === "/api/loyalty") { const current=requireActor(who); return json(res,200,{ok:true,loyalty:await repo.loyalty(current.id)}); }
+  if(req.method==="GET"&&path==="/api/integrations/1c/status"){requireRole(who,ADMIN);let probe=null;if(url.searchParams.get("probe")==="1"&&oneC.configured){try{const result=await oneC.probe();probe={ok:true,status:result.status};}catch(error){probe={ok:false,error:error.message};}}return json(res,200,{ok:true,integration:{...oneC.publicConfig,queue:await repo.oneCQueueStatus(),probe}});}
+  const loyaltyMatch=path.match(/^\/api\/loyalty\/([^/]+)\/adjust$/);
+  if(req.method==="POST"&&loyaltyMatch){const current=requireRole(who,STAFF);const data=await body(req);const delta=Number(data.delta);if(!Number.isInteger(delta)||delta===0||Math.abs(delta)>100)throw Object.assign(new Error("Изменение должно быть целым числом от -100 до 100"),{status:400});const target=await repo.userById(loyaltyMatch[1]);if(!target||target.role!=="client")throw Object.assign(new Error("Гость не найден"),{status:404});const loyalty=await repo.adjustLoyalty({userId:target.id,delta,kind:delta<0?"redeem":"manual",note:String(data.note||"").slice(0,500),actorId:current.id});await repo.audit(current.id,"loyalty_adjust","user",target.id,null,{delta,note:data.note||""});return json(res,200,{ok:true,loyalty});}
   const roleMatch=path.match(/^\/api\/users\/([^/]+)\/role$/);
   if(req.method==="PATCH"&&roleMatch){const current=requireRole(who,ADMIN);const data=await body(req);if(!["client","master","admin"].includes(data.role))throw Object.assign(new Error("Некорректная роль"),{status:400});if(current.id===roleMatch[1]&&data.role!==current.role)throw Object.assign(new Error("Нельзя изменить собственную роль"),{status:400});const row=await repo.setRole(current.id,roleMatch[1],data.role);return json(res,200,{ok:true,user:publicUser(row)});}
 
@@ -172,13 +180,17 @@ async function route(req, res) {
   }
 
   const recordMatch=path.match(/^\/api\/records\/([a-z_]+)(?:\/([^/]+))?$/);
-  if(recordMatch){const name=recordMatch[1],id=recordMatch[2];const current=requireActor(who);const staffOnly=new Set(["staff_requests","shift_reports","service_guides","inventory","shifts"]);if(staffOnly.has(name))requireRole(current,STAFF);if(req.method==="GET"&&!id)return json(res,200,{ok:true,items:await repo.records.list(name,current)});if(req.method==="PUT"&&!id){const data=await body(req);if(name==="certificates")requireRole(current,STAFF);if(["inventory","shifts"].includes(name))requireRole(current,ADMIN);if(name==="orders"&&current.role==="client")throw Object.assign(new Error("Недостаточно прав"),{status:403});await repo.records.upsert(name,data,current);return json(res,200,{ok:true,id:data.id});}if(req.method==="DELETE"&&id){if(["certificates","inventory","shifts"].includes(name))requireRole(current,ADMIN);else requireRole(current,STAFF);await repo.records.remove(name,id,current);return json(res,200,{ok:true});}}
+  if(recordMatch){const name=recordMatch[1],id=recordMatch[2];const current=requireActor(who);const staffOnly=new Set(["staff_requests","shift_reports","service_guides","inventory","shifts"]);if(staffOnly.has(name))requireRole(current,STAFF);if(req.method==="GET"&&!id)return json(res,200,{ok:true,items:await repo.records.list(name,current)});if(req.method==="PUT"&&!id){const data=await body(req);if(name==="certificates"){requireRole(current,STAFF);if(!CERTIFICATE_STATUSES.has(String(data.status||"")))throw Object.assign(new Error("Некорректный статус сертификата"),{status:400});}if(["inventory","shifts"].includes(name))requireRole(current,ADMIN);if(name==="orders"&&current.role==="client")throw Object.assign(new Error("Недостаточно прав"),{status:403});await repo.records.upsert(name,data,current);return json(res,200,{ok:true,id:data.id});}if(req.method==="DELETE"&&id){if(["certificates","inventory","shifts"].includes(name))requireRole(current,ADMIN);else requireRole(current,STAFF);await repo.records.remove(name,id,current);return json(res,200,{ok:true});}}
 
   return json(res,404,{ok:false,error:"Маршрут не найден"});
 }
 
 const server=http.createServer((req,res)=>route(req,res).catch((error)=>{const status=Number(error.status)||(/duplicate key|unique constraint/i.test(error.message)?409:500);if(status>=500)console.error(new Date().toISOString(),error);json(res,status,{ok:false,error:status>=500?"Внутренняя ошибка сервера":error.message});}));
 server.listen(PORT,"127.0.0.1",()=>console.log(`chay-api listening on 127.0.0.1:${PORT}`));
+
+let oneCWorkerBusy=false;
+async function flushOneC(){if(oneCWorkerBusy||!oneC.configured)return;oneCWorkerBusy=true;try{for(const item of await repo.nextOneCItems(20)){try{await oneC.send(item);await repo.finishOneCItem(item.id,null);}catch(error){await repo.finishOneCItem(item.id,error.message);}}}catch(error){console.error("1c worker",error.message);}finally{oneCWorkerBusy=false;}}
+const oneCWorker=setInterval(flushOneC,60_000);oneCWorker.unref();setTimeout(flushOneC,3_000).unref();
 
 async function shutdown(signal){console.log(`${signal}: shutting down`);server.close(async()=>{await repo.close();process.exit(0);});setTimeout(()=>process.exit(1),10_000).unref();}
 process.on("SIGTERM",()=>shutdown("SIGTERM"));process.on("SIGINT",()=>shutdown("SIGINT"));

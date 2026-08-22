@@ -52,19 +52,26 @@ window.ApiClient = (function () {
     update: (data) => request(api("/auth/me"), { method:"PATCH", body:data }),
     password: (currentPassword, newPassword) => request(api("/auth/password"), { method:"PATCH", body:{ currentPassword, newPassword } }),
     users: () => request(api("/users")),
+    team: () => request(api("/team")),
     setRole: (id, role) => request(api(`/users/${encodeURIComponent(id)}/role`), { method:"PATCH", body:{ role } }),
   };
+  const loyalty = {
+    me: () => request(api("/loyalty")),
+    adjust: (userId, delta, note) => request(api(`/loyalty/${encodeURIComponent(userId)}/adjust`), { method:"POST", body:{ delta, note } }),
+  };
+  const integrations = { oneCStatus:(probe=false)=>request(api(`/integrations/1c/status${probe?"?probe=1":""}`)) };
 
   async function list(name) { return (await request(api(`/records/${name}`))).items || []; }
   function pushRecord(name, record) {
     if (!ready || hydrating || !record) return Promise.resolve(false);
     const key = `${name}:${record.id}`;
-    const task = (async () => { try {
+    const previous = pending.get(key) || Promise.resolve();
+    const task = previous.catch(() => false).then(async () => { try {
       if (name === "certificates" && !window.Auth?.isStaff?.()) await request(api("/public/certificates"), { method:"POST", body:record });
       else if (name === "orders" && !window.Auth?.isStaff?.()) await request(api("/public/orders"), { method:"POST", body:{ ...record, createdAt:record.ts || record.createdAt } });
       else await request(api(`/records/${name}`), { method:"PUT", body:record });
       setState("cloud", { synced:name }); return true;
-    } catch (error) { setState("degraded", { error:error.message, collection:name }); return false; } })();
+    } catch (error) { setState("degraded", { error:error.message, collection:name }); return false; } });
     pending.set(key, task);
     task.finally(() => setTimeout(() => { if (pending.get(key) === task) pending.delete(key); }, 1000));
     return task;
@@ -97,7 +104,7 @@ window.ApiClient = (function () {
   }
 
   return {
-    init, auth, hydrate, list, pushRecord, removeRecord,
+    init, auth, loyalty, integrations, hydrate, list, pushRecord, removeRecord,
     isReady: () => ready,
     isHydrating: () => hydrating,
     status: () => state,

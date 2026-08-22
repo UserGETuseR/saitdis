@@ -5,6 +5,7 @@
   let cloud = false;
   let currentUser = null;
   let users = [];
+  let publicTeam = [];
   const listeners = [];
 
   const initials = (name) => String(name || "?").trim().split(/\s+/).slice(0,2).map((word) => word[0]).join("").toUpperCase();
@@ -17,6 +18,7 @@
     try { users = (await ApiClient.auth.users()).items.map(normalize); } catch (_) { users = [currentUser]; }
     return users;
   }
+  async function refreshTeam() { if(!cloud||!currentUser){publicTeam=[];return publicTeam;}try{publicTeam=(await ApiClient.auth.team()).items||[];}catch(_){publicTeam=[];}return publicTeam; }
 
   const facade = {
     async initialize() {
@@ -25,6 +27,7 @@
       const result = await ApiClient.auth.me();
       setCurrent(result.user);
       await refreshUsers();
+      await refreshTeam();
       if (currentUser) await ApiClient.hydrate(currentUser);
       return currentUser;
     },
@@ -38,17 +41,17 @@
     isLoginTaken(login, exceptId) { return cloud ? users.some((u) => u.id !== exceptId && u.login.toLowerCase() === String(login).toLowerCase()) : LocalAuth.isLoginTaken(login, exceptId); },
     async register(data) {
       if (!cloud) return LocalAuth.register(data);
-      try { const result = await ApiClient.auth.register(data); setCurrent(result.user); await refreshUsers(); await ApiClient.hydrate(currentUser); return { ok:true, user:currentUser }; }
+      try { const result = await ApiClient.auth.register(data); setCurrent(result.user); await refreshUsers(); await refreshTeam(); await ApiClient.hydrate(currentUser); return { ok:true, user:currentUser }; }
       catch (error) { return { ok:false, error:error.message }; }
     },
     async login(login, pass) {
       if (!cloud) return LocalAuth.login(login, pass);
-      try { const result = await ApiClient.auth.login(login, pass); setCurrent(result.user); await refreshUsers(); await ApiClient.hydrate(currentUser); return { ok:true, user:currentUser }; }
+      try { const result = await ApiClient.auth.login(login, pass); setCurrent(result.user); await refreshUsers(); await refreshTeam(); await ApiClient.hydrate(currentUser); return { ok:true, user:currentUser }; }
       catch (error) { return { ok:false, error:error.message }; }
     },
     logout() {
       if (!cloud) return LocalAuth.logout();
-      setCurrent(null); users = []; ApiClient.auth.logout().catch(() => {});
+      setCurrent(null); users = []; publicTeam=[]; ApiClient.auth.logout().catch(() => {});
     },
     async updateAccount(data) {
       if (!cloud) return LocalAuth.updateAccount(data);
@@ -73,6 +76,7 @@
     listClients: () => cloud ? users.filter((u)=>u.role==="client") : LocalAuth.listClients(),
     listAll: () => cloud ? users.slice() : LocalAuth.listAll(),
     listStaff: () => cloud ? users.filter((u)=>["master","admin","owner"].includes(u.role)) : LocalAuth.listStaff(),
+    listPublicTeam: () => cloud ? publicTeam.slice() : LocalAuth.listStaff(),
     userById: (id) => cloud ? users.find((u)=>u.id===id)||null : LocalAuth.userById(id),
     async setRole(id,role) {
       if (!cloud) return LocalAuth.setRole(id,role);
