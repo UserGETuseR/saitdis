@@ -636,6 +636,11 @@ Views.auth = function () {
             <input type="email" name="email" autocomplete="email" placeholder="для восстановления, по желанию" />
           </div>
           <div class="field reg-only hidden">
+            <label><i class="bi bi-bookmark"></i> Ваша чайная глава</label>
+            <select name="branchId">${(window.Branches?.all?.()||[]).map((branch)=>`<option value="${branch.id}" ${branch.id===(window.Branches?.current?.().id||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select>
+            <small class="field-hint">Сообщения и заказы увидит команда выбранного города. Лояльность действует во всей сети.</small>
+          </div>
+          <div class="field reg-only hidden">
             <label><i class="bi bi-people"></i> Кто ты в чайной</label>
             <div class="role-pick">
               <label class="role-opt"><input type="radio" name="role" value="client" checked /><span><i class="bi bi-cup-hot"></i> Гость / клиент</span></label>
@@ -692,7 +697,7 @@ Views.auth = function () {
         const data = Object.fromEntries(new FormData(form).entries());
         const res = await (mode === "login"
           ? Auth.login(data.login, data.pass)
-          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, role: "client" }));
+          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, branchId:data.branchId||"sochi", role: "client" }));
         submit.disabled = false;
         if (!res.ok) { showErr(res.error); return; }
         App.afterAuth(res.user);
@@ -1351,7 +1356,7 @@ Views.profile = function () {
   const s = Store.get();
   const p = u.profile;
   const isMaster = u.role === "master";
-  const isAdmin = u.role === "admin";
+  const isAdmin = u.role === "admin" || u.role === "owner";
   const ach = Views._util.achievements(s, p);
   const doneCount = ach.filter((a) => a.done).length;
   const homeRoute = isAdmin ? "admin" : isMaster ? "master" : "client";
@@ -1385,6 +1390,7 @@ Views.profile = function () {
           <div class="field"><label><i class="bi bi-person"></i> Имя</label><input name="name" value="${u.name}" /></div>
           <div class="field"><label><i class="bi bi-at"></i> Логин</label><input name="login" value="${u.login || ""}" /><small class="field-hint">Латиница, цифры и . _ - · 3–20 символов</small></div>
           <div class="field"><label><i class="bi bi-envelope"></i> E-mail <span class="muted">(необязательно)</span></label><input name="email" value="${u.email || ""}" placeholder="для восстановления" /></div>
+          <div class="field"><label><i class="bi bi-bookmark"></i> ${u.role==="client"?"Моя чайная глава":"Рабочий город"}</label>${u.role==="client"?`<select name="branchId">${Branches.all().map((branch)=>`<option value="${branch.id}" ${branch.id===(u.branchId||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select><small class="field-hint">Лояльность общая для сети. Заказы и сообщения получает команда этого города.</small>`:`<div class="profile-branch-readonly"><b>${Branches.byId(u.branchId||"sochi").city}</b><span>Рабочую главу назначает директор сети</span></div>`}</div>
           <div class="field">
             <label><i class="bi bi-palette"></i> Цвет аватара</label>
             <div class="color-pick" id="colorPick">
@@ -1431,7 +1437,7 @@ Views.profile = function () {
         <button class="btn ghost" data-go="#/${homeRoute}"><i class="bi bi-grid"></i> В кабинет</button>
         <button class="btn ghost" id="logoutBtn"><i class="bi bi-box-arrow-right"></i> Выйти</button>
       </div>
-      <p class="disclaimer"><i class="bi bi-shield-lock"></i> Прототип: данные хранятся в браузере. В боевой версии — серверная авторизация и шифрование паролей.</p>
+      <p class="disclaimer"><i class="bi bi-shield-lock"></i> ${Auth.isCloud()?"Аккаунт, роли и выбранный город хранятся в защищённой серверной базе.":"Локальный режим разработки: данные доступны только в этом браузере."}</p>
     </section>`;
   return {
     html,
@@ -1460,8 +1466,9 @@ Views.profile = function () {
         e.preventDefault();
         hideErr(acctErr);
         const d = Object.fromEntries(new FormData(acctForm).entries());
-        const res = await Auth.updateAccount({ name: d.name, login: d.login, email: d.email, avatarColor: d.avatarColor });
+        const res = await Auth.updateAccount({ name: d.name, login: d.login, email: d.email, avatarColor: d.avatarColor, ...(u.role==="client"?{branchId:d.branchId}:{}) });
         if (!res.ok) { showErr(acctErr, res.error); return; }
+        if(u.role==="client"&&d.branchId)await Branches.select(d.branchId,{save:false});
         UI.toast("Аккаунт обновлён");
         App.render();
       });

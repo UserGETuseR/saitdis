@@ -85,6 +85,7 @@ window.App = (function () {
   function renderChrome(path) {
     const u = Auth.current();
     const model = navModel();
+    const branch = window.Branches?.current?.() || { id:"sochi",city:"Сочи" };
     const linkHTML = (a) => `<a data-route="${a.route}" href="#${a.route}" class="${a.route === path ? "active" : ""}"><i class="bi ${a.icon}"></i> ${a.label}</a>`;
     const tabHTML = (a) => `<a data-route="${a.route}" href="#${a.route}" class="${a.route === path ? "active" : ""}"><i class="bi ${a.icon}"></i>${a.label}</a>`;
 
@@ -92,9 +93,9 @@ window.App = (function () {
 
     const auth = document.getElementById("navAuth");
     if (u) {
-      auth.innerHTML = `<a class="nav-user ${path === "/profile" ? "active" : ""}" data-route="/profile" href="#/profile" title="Профиль">${UI.avatar(u, 34)}<span class="nu-name">${u.name.split(" ")[0]}</span></a>`;
+      auth.innerHTML = `<button class="city-chip" data-city-open aria-label="Выбрать город"><small>глава города</small><b>${branch.city}</b></button><a class="nav-user ${path === "/profile" ? "active" : ""}" data-route="/profile" href="#/profile" title="Профиль">${UI.avatar(u, 34)}<span class="nu-name">${u.name.split(" ")[0]}</span></a>`;
     } else {
-      auth.innerHTML = `<a class="btn small login-btn" data-route="/auth" href="#/auth"><i class="bi bi-box-arrow-in-right"></i> Войти</a>`;
+      auth.innerHTML = `<button class="city-chip" data-city-open aria-label="Выбрать город"><small>${branch.id==="sochi"?"первая глава":"глава города"}</small><b>${branch.city}</b></button><a class="btn small login-btn" data-route="/auth" href="#/auth"><i class="bi bi-box-arrow-in-right"></i> Войти</a>`;
     }
 
     const tab = document.getElementById("tabLinks");
@@ -109,6 +110,16 @@ window.App = (function () {
         a.addEventListener("click", (e) => { e.preventDefault(); UI.navigate("#" + a.dataset.route); })
       );
     });
+    auth.querySelector("[data-city-open]")?.addEventListener("click",openCityPicker);
+  }
+
+  function openCityPicker() {
+    const modal=document.getElementById("modal"),current=Branches.current(),u=Auth.current();
+    modal.innerHTML=`<div class="modal-card city-picker"><button class="modal-x" data-close aria-label="Закрыть"><i class="bi bi-x-lg"></i></button><span class="section-tag">Сеть как одна книга</span><h2>Выберите<br>свою главу.</h2><p>Меню и лояльность объединяют сеть. Команда, сообщения и заказы приходят именно в выбранный город.</p><div class="city-picker-grid">${Branches.all().map((b,i)=>`<button data-city-pick="${b.id}" class="${b.id===current.id?"active":""}"><span>0${i+1}</span><b>${b.city}</b><em>${b.chapter}</em><small>${b.subtitle}</small></button>`).join("")}</div>${u&&["master","admin"].includes(u.role)?`<p class="city-lock">Рабочая глава сотрудника назначается директором сети.</p>`:""}</div>`;
+    modal.classList.add("open");
+    modal.querySelector("[data-close]").onclick=closeModal;
+    modal.addEventListener("click",(e)=>{if(e.target===modal)closeModal();},{once:true});
+    modal.querySelectorAll("[data-city-pick]").forEach((button)=>button.onclick=async()=>{button.disabled=true;const result=await Branches.select(button.dataset.cityPick);if(!result.ok){UI.toast(result.error);button.disabled=false;return;}await Auth.refreshTeam?.(result.branch.id);closeModal();UI.toast(`${result.branch.city} · глава выбрана`);render();});
   }
 
   function afterAuth(user) {
@@ -277,6 +288,7 @@ window.App = (function () {
     // В production сначала восстанавливаем защищённую серверную сессию и
     // общие данные. При локальном запуске автоматически остаётся demo fallback.
     await Auth.initialize();
+    if(window.Branches)await Branches.initialize();
     Auth.seedIfEmpty();
     if (window.Inventory && (!Auth.isCloud() || Auth.isStaff())) Inventory.seedIfEmpty();
     const cur = Auth.current();
@@ -287,6 +299,7 @@ window.App = (function () {
       if(user&&ApiClient.isReady())ApiClient.loyalty.me().then((result)=>Store.setLoyalty(result.loyalty)).catch(()=>{});
       updateCartBadge();
     });
+    if(window.Branches)Branches.subscribe(()=>{renderChrome(currentPath());});
 
     // навигация по хэшу
     window.addEventListener("hashchange", render);
@@ -320,7 +333,7 @@ window.App = (function () {
     render();
   }
 
-  return { init, render, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCart, afterAuth, logout };
+  return { init, render, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, afterAuth, logout };
 })();
 
 document.addEventListener("DOMContentLoaded", App.init);

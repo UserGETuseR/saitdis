@@ -30,26 +30,27 @@ window.Operations = (function () {
   }
 
   function user() { return Auth.current(); }
+  function branchId(){return window.Branches?.current?.().id||user()?.branchId||"sochi";}
   function sendMessage({ audience, targetId, text, subject }) {
     const u = user();
     if (!u || !String(text || "").trim()) return null;
-    return messages.insert({ fromId: u.id, targetId: targetId || null, fromName: u.name, fromRole: u.role, audience, subject: subject || "Диалог", text: String(text).trim(), readBy: [u.id], status: "open" });
+    return messages.insert({ branchId:branchId(),fromId: u.id, targetId: targetId || null, fromName: u.name, fromRole: u.role, audience, subject: subject || "Диалог", text: String(text).trim(), readBy: [u.id], status: "open" });
   }
   function inbox() {
     const u = user();
     if (!u) return [];
-    return messages.all().filter((m) => m.fromId === u.id || m.targetId === u.id || (u.role !== "client" && m.audience === "team") || m.audience === u.role || (["admin","owner"].includes(u.role) && m.audience === "management")).sort((a, b) => b.createdAt - a.createdAt);
+    return messages.all().filter((m) => m.fromId === u.id || m.targetId === u.id || (m.branchId||"sochi")===branchId()&&((u.role !== "client" && m.audience === "team") || m.audience === u.role || (["admin","owner"].includes(u.role) && m.audience === "management"))).sort((a, b) => b.createdAt - a.createdAt);
   }
   function createRequest({ type, title, details, urgency }) {
     const u = user();
     if (!u) return null;
     const assignedRole = REQUEST_FLOW[u.role] || "admin";
-    return requests.insert({ type, title: String(title || "").trim(), details: String(details || "").trim(), urgency: urgency || "normal", fromId: u.id, fromName: u.name, fromRole: u.role, assignedRole, assignedLabel: ROLE_LABEL[assignedRole], status: "new", history: [{ status: "new", at: Date.now(), by: u.name }] });
+    return requests.insert({ branchId:branchId(),type, title: String(title || "").trim(), details: String(details || "").trim(), urgency: urgency || "normal", fromId: u.id, fromName: u.name, fromRole: u.role, assignedRole, assignedLabel: ROLE_LABEL[assignedRole], status: "new", history: [{ status: "new", at: Date.now(), by: u.name }] });
   }
   function visibleRequests() {
     const u = user();
     if (!u) return [];
-    return requests.all().filter((r) => r.fromId === u.id || r.assignedRole === u.role || u.role === "admin").sort((a, b) => b.createdAt - a.createdAt);
+    return requests.all().filter((r) => r.fromId === u.id || (r.branchId||"sochi")===branchId()&&(r.assignedRole === u.role || ["admin","owner"].includes(u.role))).sort((a, b) => b.createdAt - a.createdAt);
   }
   function setRequestStatus(id, status) {
     const u = user();
@@ -60,24 +61,24 @@ window.Operations = (function () {
     if (!u) return null;
     const required = Object.keys(checks || {});
     const completed = required.filter((key) => checks[key]);
-    return reports.insert({ userId: u.id, userName: u.name, role: u.role, shift, note: String(note || "").trim(), checks, completed: completed.length, total: required.length, status: completed.length === required.length ? "complete" : "attention" });
+    return reports.insert({ branchId:branchId(),userId: u.id, userName: u.name, role: u.role, shift, note: String(note || "").trim(), checks, completed: completed.length, total: required.length, status: completed.length === required.length ? "complete" : "attention" });
   }
   function visibleReports() {
     const u = user();
     if (!u) return [];
-    return reports.all().filter((r) => r.userId === u.id || u.role === "admin").sort((a, b) => b.createdAt - a.createdAt);
+    return reports.all().filter((r) => r.userId === u.id || (r.branchId||"sochi")===branchId()&&["admin","owner"].includes(u.role)).sort((a, b) => b.createdAt - a.createdAt);
   }
   function createCertificate({ buyerName, recipientName, phone, amount, wish }) {
     const u = user();
     const now = Date.now();
-    const rec = certificates.insert({ buyerId: u ? u.id : null, buyerName: String(buyerName || (u && u.name) || "Гость").trim(), recipientName: String(recipientName || "").trim(), phone: String(phone || "").trim(), amount: Number(amount), wish: String(wish || "").trim(), status: "new", statusHistory: [{ status: "new", at: now, by: u ? u.name : "Гость" }], updatedAt: now, code: "CHI-" + Math.random().toString(36).slice(2, 8).toUpperCase() });
-    messages.insert({ fromId: rec.buyerId, fromName: rec.buyerName, fromRole: u ? u.role : "client", audience: "team", subject: "Новый сертификат", text: `Сертификат ${rec.code} на ${rec.amount} ₽ · телефон ${rec.phone}`, readBy: [], status: "open", entityId: rec.id });
+    const rec = certificates.insert({ branchId:branchId(),buyerId: u ? u.id : null, buyerName: String(buyerName || (u && u.name) || "Гость").trim(), recipientName: String(recipientName || "").trim(), phone: String(phone || "").trim(), amount: Number(amount), wish: String(wish || "").trim(), status: "new", statusHistory: [{ status: "new", at: now, by: u ? u.name : "Гость" }], updatedAt: now, code: "CHI-" + Math.random().toString(36).slice(2, 8).toUpperCase() });
+    if(!window.ApiClient?.isReady?.())messages.insert({ branchId:branchId(),fromId: rec.buyerId, fromName: rec.buyerName, fromRole: u ? u.role : "client", audience: "team", subject: "Новый сертификат", text: `Сертификат ${rec.code} на ${rec.amount} ₽ · телефон ${rec.phone}`, readBy: [], status: "open", entityId: rec.id });
     return rec;
   }
   function visibleCertificates() {
     const u = user();
     if (!u) return certificates.all().filter(() => false);
-    return certificates.all().filter((c) => c.buyerId === u.id || ["master", "admin", "owner"].includes(u.role)).sort((a, b) => b.createdAt - a.createdAt);
+    return certificates.all().filter((c) => c.buyerId === u.id || (c.branchId||"sochi")===branchId()&&["master", "admin", "owner"].includes(u.role)).sort((a, b) => b.createdAt - a.createdAt);
   }
   function setCertificateStatus(id, status, contactNote) {
     const u = user(), current = certificates.byId(id);
@@ -90,7 +91,7 @@ window.Operations = (function () {
       statusHistory: changed ? [...(current.statusHistory || []), { status, at, by: u.name }] : (current.statusHistory || []),
     });
     if (changed && current.buyerId) messages.insert({
-      fromId: u.id, targetId: current.buyerId, fromName: u.name, fromRole: u.role,
+      branchId:current.branchId||branchId(),fromId: u.id, targetId: current.buyerId, fromName: u.name, fromRole: u.role,
       audience: "client", subject: `Сертификат ${current.code}`,
       text: `${CERTIFICATE_STATUS[status]}. ${status === "issued" ? `Код ${current.code} готов — сохраните его.` : "Статус обновлён в вашем кабинете."}`,
       readBy: [u.id], status: "open", entityId: current.id,

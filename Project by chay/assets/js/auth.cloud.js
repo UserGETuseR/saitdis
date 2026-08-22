@@ -18,7 +18,7 @@
     try { users = (await ApiClient.auth.users()).items.map(normalize); } catch (_) { users = [currentUser]; }
     return users;
   }
-  async function refreshTeam() { if(!cloud||!currentUser){publicTeam=[];return publicTeam;}try{publicTeam=(await ApiClient.auth.team()).items||[];}catch(_){publicTeam=[];}return publicTeam; }
+  async function refreshTeam(branchId) { if(!cloud||!currentUser){publicTeam=[];return publicTeam;}try{publicTeam=(await ApiClient.auth.team(branchId||currentUser.branchId||window.Branches?.current?.().id)).items||[];}catch(_){publicTeam=[];}return publicTeam; }
 
   const facade = {
     async initialize() {
@@ -73,14 +73,19 @@
       const profile={...currentUser.profile}; profile.meditationMinutes=(profile.meditationMinutes||0)+(data.minutes||0);if(data.breath)profile.breathSessions=(profile.breathSessions||0)+1;
       currentUser=normalize({...currentUser,profile});emit();ApiClient.auth.update({profile}).catch(()=>{});
     },
-    listClients: () => cloud ? users.filter((u)=>u.role==="client") : LocalAuth.listClients(),
+    listClients: () => {const branchId=window.Branches?.current?.().id||current()?.branchId||"sochi",source=cloud?users:LocalAuth.listClients();return source.filter((u)=>u.role==="client"&&(u.branchId||"sochi")===branchId);},
     listAll: () => cloud ? users.slice() : LocalAuth.listAll(),
-    listStaff: () => cloud ? users.filter((u)=>["master","admin","owner"].includes(u.role)) : LocalAuth.listStaff(),
+    listStaff: () => {const branchId=window.Branches?.current?.().id||current()?.branchId||"sochi",source=cloud?users:LocalAuth.listStaff();return source.filter((u)=>u.role==="owner"||(u.branchId||"sochi")===branchId);},
     listPublicTeam: () => cloud ? publicTeam.slice() : LocalAuth.listStaff(),
+    refreshTeam,
     userById: (id) => cloud ? users.find((u)=>u.id===id)||null : LocalAuth.userById(id),
     async setRole(id,role) {
       if (!cloud) return LocalAuth.setRole(id,role);
       try {const result=await ApiClient.auth.setRole(id,role);users=users.map((u)=>u.id===id?normalize(result.user):u);emit();return {ok:true,user:normalize(result.user)};}catch(error){return {ok:false,error:error.message};}
+    },
+    async setUserBranch(id,branchId) {
+      if(!cloud){const target=LocalAuth.userById(id);if(!target)return{ok:false,error:"Аккаунт не найден"};return LocalAuth.updateUser(id,{branchId});}
+      try{const result=await ApiClient.auth.setUserBranch(id,branchId);users=users.map((u)=>u.id===id?normalize(result.user):u);await refreshTeam(branchId);emit();return{ok:true,user:normalize(result.user)};}catch(error){return{ok:false,error:error.message};}
     },
     updateUser(id,patch) { if(!cloud)return LocalAuth.updateUser(id,patch); return Promise.resolve({ok:false,error:"Изменения аккаунта выполняются через защищённый профиль"}); },
     seedIfEmpty() { if(!cloud)LocalAuth.seedIfEmpty(); },

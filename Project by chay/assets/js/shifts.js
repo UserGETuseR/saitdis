@@ -21,21 +21,22 @@ window.Shifts = (function () {
   return {
     SLOTS,
     todayKey,
-    all: () => col.all(),
+    all: () => {const branchId=window.Branches?.current?.().id||"sochi";return col.all().filter((shift)=>(shift.branchId||"sochi")===branchId);},
 
     plan({ date, slot, userId, userName }) {
       // одна смена на сотрудника в слот/дату
-      const dup = col.find((s) => s.date === date && s.slot === slot && s.userId === userId);
+      const branchId=window.Branches?.current?.().id||"sochi";
+      const dup = col.find((s) => (s.branchId||"sochi")===branchId&&s.date === date && s.slot === slot && s.userId === userId);
       if (dup) return dup;
-      return col.insert({ date, slot, userId, userName, status: "planned" });
+      return col.insert({ branchId,date, slot, userId, userName, status: "planned" });
     },
     remove(id) { col.remove(id); },
     setStatus(id, status) { return col.update(id, { status }); },
 
     forUser(userId) {
-      return col.query((s) => s.userId === userId).sort((a, b) => a.date.localeCompare(b.date));
+      return this.all().filter((s) => s.userId === userId).sort((a, b) => a.date.localeCompare(b.date));
     },
-    forDate(date) { return col.query((s) => s.date === date); },
+    forDate(date) { return this.all().filter((s) => s.date === date); },
 
     // ближайшие N дней, сгруппировано
     upcoming(days) {

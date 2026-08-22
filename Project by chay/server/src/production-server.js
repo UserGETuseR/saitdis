@@ -87,7 +87,7 @@ async function actor(req) {
   const session = await repo.sessionByTokenHash(tokenHash(token));
   if (!session) return null;
   repo.touchSession(session.id).catch(() => {});
-  return { id:session.user_id, name:session.name, login:session.login, email:session.email||"", role:session.role, avatarColor:session.avatar_color, profile:session.profile||{}, createdAt:+new Date(session.created_at), sessionId:session.id, sessionToken:token };
+  return { id:session.user_id, name:session.name, login:session.login, email:session.email||"", role:session.role, branchId:session.branch_id||null, avatarColor:session.avatar_color, profile:session.profile||{}, createdAt:+new Date(session.created_at), sessionId:session.id, sessionToken:token };
 }
 
 function requireActor(value) { if (!value) throw Object.assign(new Error("Необходимо войти"), { status: 401 }); return value; }
@@ -115,6 +115,7 @@ async function route(req, res) {
   if (req.method === "GET" && path === "/api/health") {
     await repo.health(); return json(res, 200, { ok:true, service:"chay-api", version:1 });
   }
+  if (req.method === "GET" && path === "/api/branches") return json(res,200,{ok:true,items:await repo.listBranches()});
   if (req.method === "GET" && path === "/api/auth/me") return json(res, 200, { ok:true, user:who ? { ...who, sessionToken:undefined } : null, cloud:true });
 
   if (req.method === "POST" && path === "/api/auth/register") {
@@ -125,7 +126,7 @@ async function route(req, res) {
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw Object.assign(new Error("Некорректный e-mail"), { status:400 });
     if (await repo.userByLogin(login)) throw Object.assign(new Error("Такой логин уже занят"), { status:409 });
     const pass = await hashPassword(password);
-    const row = await repo.createUser({ login,name,email,salt:pass.salt,hash:pass.hash,avatarColor:avatarColor(name+login),profile:defaultProfile() });
+    const row = await repo.createUser({ login,name,email,branchId:data.branchId||"sochi",salt:pass.salt,hash:pass.hash,avatarColor:avatarColor(name+login),profile:defaultProfile() });
     await repo.audit(row.id,"register","user",row.id,null,{ login:row.login, role:row.role });
     return startSession(req,res,row);
   }
@@ -151,6 +152,7 @@ async function route(req, res) {
     if(data.email!==undefined){const email=String(data.email||"").trim().toLowerCase();if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))throw Object.assign(new Error("Некорректный e-mail"),{status:400});patch.email=email;}
     if(data.avatarColor!==undefined&&/^#[0-9a-f]{6}$/i.test(data.avatarColor))patch.avatarColor=data.avatarColor;
     if(data.profile&&typeof data.profile==="object")patch.profile=data.profile;
+    if(data.branchId!==undefined){if(current.role!=="client")throw Object.assign(new Error("Рабочий город сотрудника назначает директор"),{status:403});patch.branchId=String(data.branchId||"").toLowerCase();}
     const row=await repo.updateOwn(current.id,patch); await repo.audit(current.id,"update","profile",current.id,null,patch);
     return json(res,200,{ok:true,user:publicUser(row)});
   }
@@ -162,21 +164,24 @@ async function route(req, res) {
     return json(res,200,{ok:true});
   }
 
-  if (req.method === "GET" && path === "/api/users") { requireRole(who,STAFF); return json(res,200,{ok:true,items:await repo.listUsers()}); }
-  if (req.method === "GET" && path === "/api/team") { requireActor(who); return json(res,200,{ok:true,items:await repo.publicTeam()}); }
+  if (req.method === "GET" && path === "/api/users") { const current=requireRole(who,STAFF); return json(res,200,{ok:true,items:await repo.listUsers(current)}); }
+  if (req.method === "GET" && path === "/api/team") { const current=requireActor(who);const branchId=current.role==="owner"?(url.searchParams.get("branch")||"sochi"):(current.branchId||"sochi");return json(res,200,{ok:true,items:await repo.publicTeam(branchId)}); }
+  if (req.method === "GET" && path === "/api/branches/summary") { const current=requireRole(who,STAFF);return json(res,200,{ok:true,items:await repo.branchSummaries(current)}); }
   if (req.method === "GET" && path === "/api/loyalty") { const current=requireActor(who); return json(res,200,{ok:true,loyalty:await repo.loyalty(current.id)}); }
   if(req.method==="GET"&&path==="/api/integrations/1c/status"){requireRole(who,ADMIN);let probe=null;if(url.searchParams.get("probe")==="1"&&oneC.configured){try{const result=await oneC.probe();probe={ok:true,status:result.status};}catch(error){probe={ok:false,error:error.message};}}return json(res,200,{ok:true,integration:{...oneC.publicConfig,queue:await repo.oneCQueueStatus(),probe}});}
   const loyaltyMatch=path.match(/^\/api\/loyalty\/([^/]+)\/adjust$/);
-  if(req.method==="POST"&&loyaltyMatch){const current=requireRole(who,STAFF);const data=await body(req);const delta=Number(data.delta);if(!Number.isInteger(delta)||delta===0||Math.abs(delta)>100)throw Object.assign(new Error("Изменение должно быть целым числом от -100 до 100"),{status:400});const target=await repo.userById(loyaltyMatch[1]);if(!target||target.role!=="client")throw Object.assign(new Error("Гость не найден"),{status:404});const loyalty=await repo.adjustLoyalty({userId:target.id,delta,kind:delta<0?"redeem":"manual",note:String(data.note||"").slice(0,500),actorId:current.id});await repo.audit(current.id,"loyalty_adjust","user",target.id,null,{delta,note:data.note||""});return json(res,200,{ok:true,loyalty});}
+  if(req.method==="POST"&&loyaltyMatch){const current=requireRole(who,STAFF);const data=await body(req);const delta=Number(data.delta);if(!Number.isInteger(delta)||delta===0||Math.abs(delta)>100)throw Object.assign(new Error("Изменение должно быть целым числом от -100 до 100"),{status:400});const target=await repo.userById(loyaltyMatch[1]);if(!target||target.role!=="client"||current.role!=="owner"&&target.branch_id!==current.branchId)throw Object.assign(new Error("Гость этого города не найден"),{status:404});const loyalty=await repo.adjustLoyalty({userId:target.id,delta,kind:delta<0?"redeem":"manual",note:String(data.note||"").slice(0,500),actorId:current.id});await repo.audit(current.id,"loyalty_adjust","user",target.id,null,{delta,note:data.note||""});return json(res,200,{ok:true,loyalty});}
   const roleMatch=path.match(/^\/api\/users\/([^/]+)\/role$/);
-  if(req.method==="PATCH"&&roleMatch){const current=requireRole(who,ADMIN);const data=await body(req);if(!["client","master","admin"].includes(data.role))throw Object.assign(new Error("Некорректная роль"),{status:400});if(current.id===roleMatch[1]&&data.role!==current.role)throw Object.assign(new Error("Нельзя изменить собственную роль"),{status:400});const row=await repo.setRole(current.id,roleMatch[1],data.role);return json(res,200,{ok:true,user:publicUser(row)});}
+  if(req.method==="PATCH"&&roleMatch){const current=requireRole(who,ADMIN);const data=await body(req);if(!["client","master","admin"].includes(data.role))throw Object.assign(new Error("Некорректная роль"),{status:400});if(data.role==="admin"&&current.role!=="owner")throw Object.assign(new Error("Управляющую назначает только директор"),{status:403});if(current.id===roleMatch[1]&&data.role!==current.role)throw Object.assign(new Error("Нельзя изменить собственную роль"),{status:400});const target=await repo.userById(roleMatch[1]);if(!target||target.role==="owner"||current.role!=="owner"&&target.branch_id!==current.branchId)throw Object.assign(new Error("Аккаунт недоступен"),{status:403});const row=await repo.setRole(current.id,roleMatch[1],data.role);return json(res,200,{ok:true,user:publicUser(row)});}
+  const branchMatch=path.match(/^\/api\/users\/([^/]+)\/branch$/);
+  if(req.method==="PATCH"&&branchMatch){const current=requireRole(who,new Set(["owner"]));const data=await body(req);if(current.id===branchMatch[1])throw Object.assign(new Error("Город директора задаётся через фильтр сети"),{status:400});const row=await repo.setUserBranch(current,branchMatch[1],data.branchId);return json(res,200,{ok:true,user:publicUser(row)});}
 
   if(req.method==="POST"&&path==="/api/public/certificates"){
-    rateLimit(`cert:${clientIp(req)}`,10,60*60_000);const data=await body(req);const phone=String(data.phone||"").trim();if(phone.replace(/\D/g,"").length<10)throw Object.assign(new Error("Укажите номер телефона"),{status:400});const amount=Number(data.amount);if(!Number.isFinite(amount)||amount<500||amount>100000)throw Object.assign(new Error("Сумма сертификата от 500 до 100 000 ₽"),{status:400});const id=safeId(data.id,"cer");const code=/^CHI-[A-Z0-9]{5,12}$/.test(String(data.code||""))?data.code:`CHI-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;await repo.createPublicCertificate({id,buyerId:who?.id,buyerName:cleanName(data.buyerName||who?.name),recipientName:cleanName(data.recipientName),phone:phone.slice(0,40),amount,wish:String(data.wish||"").slice(0,1000),code,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,code,status:"new"});
+    rateLimit(`cert:${clientIp(req)}`,10,60*60_000);const data=await body(req);const phone=String(data.phone||"").trim();if(phone.replace(/\D/g,"").length<10)throw Object.assign(new Error("Укажите номер телефона"),{status:400});const amount=Number(data.amount);if(!Number.isFinite(amount)||amount<500||amount>100000)throw Object.assign(new Error("Сумма сертификата от 500 до 100 000 ₽"),{status:400});const id=safeId(data.id,"cer");const code=/^CHI-[A-Z0-9]{5,12}$/.test(String(data.code||""))?data.code:`CHI-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;await repo.createPublicCertificate({id,buyerId:who?.id,branchId:who?.branchId||data.branchId||"sochi",buyerName:cleanName(data.buyerName||who?.name),recipientName:cleanName(data.recipientName),phone:phone.slice(0,40),amount,wish:String(data.wish||"").slice(0,1000),code,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,code,status:"new"});
   }
 
   if(req.method==="POST"&&path==="/api/public/orders"){
-    rateLimit(`order:${clientIp(req)}`,30,60*60_000);const data=await body(req);const items=Array.isArray(data.items)?data.items.slice(0,50):[];if(!items.length)throw Object.assign(new Error("Корзина пуста"),{status:400});const total=Number(data.total)||0;if(total<0||total>1000000)throw Object.assign(new Error("Некорректная сумма"),{status:400});const id=safeId(data.id,"ord");await repo.createPublicOrder({id,userId:who?.id,userName:who?.name||String(data.userName||"Гость").slice(0,100),items,total,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,status:"new"});
+    rateLimit(`order:${clientIp(req)}`,30,60*60_000);const data=await body(req);const items=Array.isArray(data.items)?data.items.slice(0,50):[];if(!items.length)throw Object.assign(new Error("Корзина пуста"),{status:400});const total=Number(data.total)||0;if(total<0||total>1000000)throw Object.assign(new Error("Некорректная сумма"),{status:400});const id=safeId(data.id,"ord");await repo.createPublicOrder({id,userId:who?.id,branchId:who?.branchId||data.branchId||"sochi",userName:who?.name||String(data.userName||"Гость").slice(0,100),items,total,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,status:"new"});
   }
 
   const recordMatch=path.match(/^\/api\/records\/([a-z_]+)(?:\/([^/]+))?$/);

@@ -47,13 +47,16 @@ window.ApiClient = (function () {
   const auth = {
     me: () => request(api("/auth/me")),
     login: (login, password) => request(api("/auth/login"), { method:"POST", body:{ login, password } }),
-    register: (data) => request(api("/auth/register"), { method:"POST", body:{ name:data.name, login:data.login, email:data.email, password:data.pass, password2:data.pass2 } }),
+    register: (data) => request(api("/auth/register"), { method:"POST", body:{ name:data.name, login:data.login, email:data.email, branchId:data.branchId, password:data.pass, password2:data.pass2 } }),
     logout: () => request(api("/auth/logout"), { method:"POST", body:{} }),
     update: (data) => request(api("/auth/me"), { method:"PATCH", body:data }),
     password: (currentPassword, newPassword) => request(api("/auth/password"), { method:"PATCH", body:{ currentPassword, newPassword } }),
     users: () => request(api("/users")),
-    team: () => request(api("/team")),
+    branches: () => request(api("/branches")),
+    branchSummary: () => request(api("/branches/summary")),
+    team: (branchId) => request(api(`/team${branchId?`?branch=${encodeURIComponent(branchId)}`:""}`)),
     setRole: (id, role) => request(api(`/users/${encodeURIComponent(id)}/role`), { method:"PATCH", body:{ role } }),
+    setUserBranch: (id, branchId) => request(api(`/users/${encodeURIComponent(id)}/branch`), { method:"PATCH", body:{ branchId } }),
   };
   const loyalty = {
     me: () => request(api("/loyalty")),
@@ -67,8 +70,8 @@ window.ApiClient = (function () {
     const key = `${name}:${record.id}`;
     const previous = pending.get(key) || Promise.resolve();
     const task = previous.catch(() => false).then(async () => { try {
-      if (name === "certificates" && !window.Auth?.isStaff?.()) await request(api("/public/certificates"), { method:"POST", body:record });
-      else if (name === "orders" && !window.Auth?.isStaff?.()) await request(api("/public/orders"), { method:"POST", body:{ ...record, createdAt:record.ts || record.createdAt } });
+      if (name === "certificates" && !window.Auth?.isStaff?.()) await request(api("/public/certificates"), { method:"POST", body:{...record,branchId:record.branchId||window.Branches?.current?.().id||"sochi"} });
+      else if (name === "orders" && !window.Auth?.isStaff?.()) await request(api("/public/orders"), { method:"POST", body:{ ...record, branchId:record.branchId||window.Branches?.current?.().id||"sochi", createdAt:record.ts || record.createdAt } });
       else await request(api(`/records/${name}`), { method:"PUT", body:record });
       setState("cloud", { synced:name }); return true;
     } catch (error) { setState("degraded", { error:error.message, collection:name }); return false; } });

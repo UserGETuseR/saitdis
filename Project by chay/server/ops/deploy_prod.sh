@@ -75,6 +75,8 @@ set -a
 . "$ENV_FILE"
 set +a
 PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U chay_app -d chay -Atqc 'select current_user' | grep -qx chay_app
+install -d -m 0750 -o postgres -g postgres /var/backups/chay
+sudo -u postgres pg_dump chay --format=custom --file="/var/backups/chay/chay-before-$SHA-$STAMP.dump"
 sudo -u postgres psql -d chay -v ON_ERROR_STOP=1 -f "$PROJECT_DIR/server/sql/001_production.sql" >/var/log/chay-migration.log
 
 if [[ -d "$API_RELEASE" && ! -f "$API_RELEASE/node_modules/pg/package.json" ]]; then
@@ -142,9 +144,11 @@ systemctl reload nginx
 sleep 2
 
 curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-api.json https://chay.occochi.ru/api/health
+curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-branches.json https://chay.occochi.ru/api/branches
 curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-home.html https://chay.occochi.ru/
 curl -fsS --noproxy '*' --resolve chay.occochi.ru:443:127.0.0.1 -o /tmp/chay-deploy-kp.html https://chay.occochi.ru/kp/
 grep -q '"service":"chay-api"' /tmp/chay-deploy-api.json
+grep -q '"id":"sochi"' /tmp/chay-deploy-branches.json
 grep -q 'assets/js/api.js' /tmp/chay-deploy-home.html
 grep -q '30 000' /tmp/chay-deploy-kp.html
 

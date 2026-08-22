@@ -3,12 +3,32 @@ begin;
 create extension if not exists pgcrypto;
 create extension if not exists citext;
 
+create table if not exists chay_branches (
+  id text primary key,
+  city text not null unique,
+  chapter text not null,
+  subtitle text not null,
+  accent text not null default '#B85C2C',
+  position int not null default 0,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into chay_branches(id,city,chapter,subtitle,accent,position,active) values
+  ('sochi','Сочи','Морской свет','Чай после солнца · первая глава сети','#B85C2C',10,true),
+  ('rostov','Ростов','Тёплый ритм','Разговор, который не хочется торопить','#2E3F35',20,true),
+  ('krasnodar','Краснодар','Южный сад','Спокойная щедрость большого стола','#5A7560',30,true),
+  ('moscow','Москва','Тихий фокус','Пауза внутри большого города','#0E0E0E',40,true)
+on conflict(id) do update set city=excluded.city,chapter=excluded.chapter,subtitle=excluded.subtitle,accent=excluded.accent,position=excluded.position,active=excluded.active,updated_at=now();
+
 create table if not exists chay_users (
   id text primary key default gen_random_uuid()::text,
   login citext not null unique,
   name text not null,
   email citext,
   role text not null default 'client' check (role in ('client','master','admin','owner')),
+  branch_id text references chay_branches(id),
   password_salt text not null,
   password_hash text not null,
   avatar_color text not null default '#c4452f',
@@ -17,6 +37,10 @@ create table if not exists chay_users (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_users add column if not exists branch_id text references chay_branches(id);
+update chay_users set branch_id='sochi' where branch_id is null and role<>'owner';
+update chay_users set branch_id=null where role='owner';
+create index if not exists chay_users_branch on chay_users(branch_id,role) where active=true;
 
 create unique index if not exists chay_users_email_unique
   on chay_users (email) where email is not null and email <> '';
@@ -37,6 +61,7 @@ create table if not exists chay_messages (
   id text primary key,
   from_id text references chay_users(id) on delete set null,
   target_id text references chay_users(id) on delete set null,
+  branch_id text references chay_branches(id),
   from_name text not null,
   from_role text not null,
   audience text not null check (audience in ('team','master','admin','owner','management','client')),
@@ -49,8 +74,11 @@ create table if not exists chay_messages (
   updated_at timestamptz not null default now()
 );
 alter table chay_messages add column if not exists target_id text references chay_users(id) on delete set null;
+alter table chay_messages add column if not exists branch_id text references chay_branches(id);
+update chay_messages set branch_id='sochi' where branch_id is null;
 create index if not exists chay_messages_created on chay_messages(created_at desc);
 create index if not exists chay_messages_target on chay_messages(target_id, created_at desc);
+create index if not exists chay_messages_branch on chay_messages(branch_id,created_at desc);
 
 create table if not exists chay_staff_requests (
   id text primary key,
@@ -61,6 +89,7 @@ create table if not exists chay_staff_requests (
   from_id text references chay_users(id) on delete set null,
   from_name text not null,
   from_role text not null,
+  branch_id text references chay_branches(id),
   assigned_role text not null check (assigned_role in ('master','admin','owner')),
   assigned_label text,
   status text not null default 'new' check (status in ('new','in_progress','done','cancelled')),
@@ -68,6 +97,8 @@ create table if not exists chay_staff_requests (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_staff_requests add column if not exists branch_id text references chay_branches(id);
+update chay_staff_requests set branch_id='sochi' where branch_id is null;
 create index if not exists chay_staff_requests_queue on chay_staff_requests(assigned_role, status, created_at desc);
 
 create table if not exists chay_shift_reports (
@@ -75,6 +106,7 @@ create table if not exists chay_shift_reports (
   user_id text references chay_users(id) on delete set null,
   user_name text not null,
   role text not null,
+  branch_id text references chay_branches(id),
   shift_label text not null,
   note text not null default '',
   checks jsonb not null default '{}'::jsonb,
@@ -85,11 +117,14 @@ create table if not exists chay_shift_reports (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_shift_reports add column if not exists branch_id text references chay_branches(id);
+update chay_shift_reports set branch_id='sochi' where branch_id is null;
 create index if not exists chay_shift_reports_created on chay_shift_reports(created_at desc);
 
 create table if not exists chay_certificates (
   id text primary key,
   buyer_id text references chay_users(id) on delete set null,
+  branch_id text references chay_branches(id),
   buyer_name text not null,
   recipient_name text not null,
   phone text not null,
@@ -106,6 +141,8 @@ create table if not exists chay_certificates (
 );
 alter table chay_certificates add column if not exists contact_note text not null default '';
 alter table chay_certificates add column if not exists status_history jsonb not null default '[]'::jsonb;
+alter table chay_certificates add column if not exists branch_id text references chay_branches(id);
+update chay_certificates set branch_id='sochi' where branch_id is null;
 alter table chay_certificates drop constraint if exists chay_certificates_status_check;
 alter table chay_certificates add constraint chay_certificates_status_check check (status in ('new','contacted','awaiting_payment','confirmed','issued','redeemed','cancelled'));
 update chay_certificates set status_history=jsonb_build_array(jsonb_build_object('status',status,'at',extract(epoch from created_at)*1000,'by','Система')) where jsonb_array_length(status_history)=0;
@@ -123,6 +160,8 @@ create table if not exists chay_guides (
 
 create table if not exists chay_inventory (
   id text primary key,
+  branch_id text not null default 'sochi' references chay_branches(id),
+  catalog_id text not null,
   kind text not null check (kind in ('tea','mushroom','drink','supply','other')),
   name text not null,
   unit text not null,
@@ -132,10 +171,20 @@ create table if not exists chay_inventory (
   updated_at timestamptz not null default now(),
   updated_by text references chay_users(id) on delete set null
 );
+alter table chay_inventory add column if not exists branch_id text references chay_branches(id);
+alter table chay_inventory add column if not exists catalog_id text;
+update chay_inventory set branch_id='sochi' where branch_id is null;
+update chay_inventory set catalog_id=id where catalog_id is null;
+alter table chay_inventory alter column branch_id set default 'sochi';
+alter table chay_inventory alter column branch_id set not null;
+alter table chay_inventory alter column catalog_id set not null;
+create index if not exists chay_inventory_branch on chay_inventory(branch_id,kind,name);
+create unique index if not exists chay_inventory_branch_catalog on chay_inventory(branch_id,catalog_id);
 
 create table if not exists chay_orders (
   id text primary key,
   user_id text references chay_users(id) on delete set null,
+  branch_id text not null default 'sochi' references chay_branches(id),
   user_name text not null default 'Гость',
   master_id text references chay_users(id) on delete set null,
   channel text not null default 'self' check (channel in ('self','pos','certificate')),
@@ -147,8 +196,13 @@ create table if not exists chay_orders (
   updated_at timestamptz not null default now()
 );
 alter table chay_orders add column if not exists loyalty_credited_at timestamptz;
+alter table chay_orders add column if not exists branch_id text references chay_branches(id);
+update chay_orders set branch_id='sochi' where branch_id is null;
+alter table chay_orders alter column branch_id set default 'sochi';
+alter table chay_orders alter column branch_id set not null;
 create index if not exists chay_orders_queue on chay_orders(status, created_at desc);
 create index if not exists chay_orders_user on chay_orders(user_id, created_at desc);
+create index if not exists chay_orders_branch on chay_orders(branch_id,status,created_at desc);
 
 create table if not exists chay_loyalty_accounts (
   user_id text primary key references chay_users(id) on delete cascade,
@@ -190,6 +244,7 @@ create index if not exists chay_outbox_queue on chay_integration_outbox(integrat
 
 create table if not exists chay_shifts (
   id text primary key,
+  branch_id text not null default 'sochi' references chay_branches(id),
   shift_date date not null,
   slot text not null check (slot in ('morning','evening')),
   user_id text references chay_users(id) on delete cascade,
@@ -197,8 +252,13 @@ create table if not exists chay_shifts (
   status text not null default 'planned' check (status in ('planned','open','closed')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique(shift_date, slot, user_id)
+  unique(branch_id, shift_date, slot, user_id)
 );
+alter table chay_shifts add column if not exists branch_id text references chay_branches(id);
+update chay_shifts set branch_id='sochi' where branch_id is null;
+alter table chay_shifts alter column branch_id set default 'sochi';
+alter table chay_shifts alter column branch_id set not null;
+create index if not exists chay_shifts_branch on chay_shifts(branch_id,shift_date,slot);
 
 create table if not exists chay_audit_log (
   id bigserial primary key,

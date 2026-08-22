@@ -34,13 +34,14 @@ window.Orders = (function () {
 
   return {
     STATUS, FLOW,
-    all: () => col.all().slice().sort((a, b) => b.ts - a.ts),
+    all: () => {const u=window.Auth?.current?.(),branchId=window.Branches?.current?.().id||u?.branchId||"sochi";return col.all().filter((order)=>u?.role==="client"?order.userId===u.id:(order.branchId||"sochi")===branchId).slice().sort((a, b) => b.ts - a.ts);},
     byId: (id) => col.byId(id),
 
     create({ userId, userName, masterId, items, channel }) {
       const snap = (items || []).map(snapshot);
       const total = snap.reduce((s, x) => s + (x.price || 0), 0);
       const order = col.insert({
+        branchId:window.Branches?.current?.().id||"sochi",
         ts: Date.now(),
         userId: userId || null,
         userName: userName || "Гость",

@@ -79,6 +79,7 @@ window.Auth = (function () {
 
     // миграция: у старых аккаунтов не было логина — берём из e-mail (до @)
     db.users.forEach((u) => {
+      if (!u.branchId && u.role !== "owner") { u.branchId = "sochi"; changed = true; }
       if (!u.login && u.email) {
         let base = u.email.split("@")[0].replace(/[^a-zA-Z0-9_.-]/g, "") || ("user" + u.id.slice(-4));
         let cand = base, n = 1;
@@ -122,8 +123,8 @@ window.Auth = (function () {
     subscribe(fn) { listeners.push(fn); },
     current,
     isMaster: () => { const u = current(); return !!u && u.role === "master"; },
-    isAdmin: () => { const u = current(); return !!u && u.role === "admin"; },
-    isStaff: () => { const u = current(); return !!u && (u.role === "master" || u.role === "admin"); },
+    isAdmin: () => { const u = current(); return !!u && (u.role === "admin" || u.role === "owner"); },
+    isStaff: () => { const u = current(); return !!u && (u.role === "master" || u.role === "admin" || u.role === "owner"); },
 
     // проверка формата логина (латиница/цифры/._-, 3–20 символов)
     validateLogin(login) {
@@ -138,7 +139,7 @@ window.Auth = (function () {
       return load().users.some((u) => (u.login || "").toLowerCase() === key && u.id !== exceptId);
     },
 
-    register({ name, login, pass, pass2, email, role }) {
+    register({ name, login, pass, pass2, email, role, branchId="sochi" }) {
       name = (name || "").trim();
       login = (login || "").trim();
       email = (email || "").trim().toLowerCase();
@@ -153,7 +154,7 @@ window.Auth = (function () {
         return { ok: false, error: "Такой логин уже занят" };
       const id = "u_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const user = {
-        id, name, login, email: email || "", pass: hash(pass),
+        id, name, login, email: email || "", pass: hash(pass), branchId,
         role: role === "master" ? "master" : "client",
         createdAt: Date.now(), avatarColor: avatarColor(name + login), initials: initials(name),
         profile: newProfile(role),
@@ -201,7 +202,7 @@ window.Auth = (function () {
     },
 
     // обновление полей аккаунта (имя, логин, e-mail, цвет аватара)
-    updateAccount({ name, login, email, avatarColor: ac }) {
+    updateAccount({ name, login, email, avatarColor: ac, branchId }) {
       const u = current(); if (!u) return { ok: false, error: "Не выполнен вход" };
       const db = load();
       const idx = db.users.findIndex((x) => x.id === u.id);
@@ -224,6 +225,7 @@ window.Auth = (function () {
       if (login !== undefined) db.users[idx].login = login;
       if (email !== undefined) db.users[idx].email = email;
       if (ac) db.users[idx].avatarColor = ac;
+      if (branchId !== undefined) db.users[idx].branchId = branchId;
       persist(db);
       emit();
       return { ok: true, user: db.users[idx] };
