@@ -11,34 +11,45 @@
       <header class="story-hero" data-city="${activeBranch.id}">
         <div class="story-hero-noise"></div><div class="story-orbit o1"></div><div class="story-orbit o2"></div>
         <div class="story-copy">
-          <span class="story-kicker"><i></i> ${activeBranch.city} · ${activeBranch.chapter}</span>
-          <h1>У каждой<br><em>чашки</em><br>есть история.</h1>
-          <p>Откройте чайную карту как книгу: выберите настроение, познакомьтесь с легендой листа и сохраните свою главу.</p>
-          <div class="story-actions"><button class="btn primary" data-go="#/menu">Открыть чайную карту <i class="bi bi-arrow-down-right"></i></button><button class="btn ghost" data-go="#/brew">Заварить самому</button></div>
+          <span class="story-kicker">${activeBranch.city} · ${activeBranch.chapter}</span>
+          <h1>У каждой<br><em>чашки</em><br><span class="hero-last">своя глава.</span></h1>
+          <p>Не просто меню, а живая чайная книга. Выберите состояние, узнайте легенду листа и пройдите свой ритуал без спешки.</p>
+          <div class="story-actions"><button class="btn primary" data-go="#/menu">Открыть чайную карту <span aria-hidden="true">↘</span></button><button class="btn ghost" data-go="#/brew">Заварить самому</button></div>
+          <div class="story-metrics" aria-label="Чайная история в цифрах"><span><b>04</b> города</span><span><b>01</b> единая история</span><span><b>∞</b> время для себя</span></div>
         </div>
-        <div class="story-cup-stage" aria-label="Три фирменных напитка маття"><img src="img/matcha-lineup-v1.png" alt="Маття-латте, маття-тоник и маття-бамбл в стаканах Чайной истории"><span class="cup-note"><b>Новая глава</b>маття · лёд · характер</span></div>
+        <figure class="story-cup-stage" aria-label="Три фирменных напитка маття">
+          <div class="story-photo-frame"><img src="img/matcha-lineup-v1.png" alt="Маття-латте, маття-тоник и маття-бамбл в стаканах Чайной истории"></div>
+          <figcaption class="cup-note"><b>Новая глава</b><span>маття · лёд · характер</span></figcaption>
+          <span class="story-art-index">CHAPTER · 01</span>
+        </figure>
         <button class="hero-city-seal" data-city-open><small>Сейчас открыта глава</small><b>${activeBranch.city}</b><span>${activeBranch.subtitle}</span></button>
-        <span class="story-index">01 / ${activeBranch.city.toUpperCase()} · ЧАЙ НЕ ПЬЮТ ТОРОПЯСЬ</span>
+        <a class="story-scroll" href="#cityBookTitle"><span>Листайте историю</span><i aria-hidden="true">↓</i></a>
+        <span class="story-index">01 · ${activeBranch.city.toUpperCase()} · ЧАЙ НЕ ПЬЮТ ТОРОПЯСЬ</span>
       </header>
 
+      <section class="story-ribbon" aria-label="Философия бренда"><span>Чай не пьют торопясь.</span><i>茶</i><span>Каждая чашка · закладка.</span><i>道</i><span>Каждый сорт · новая глава.</span></section>
+
       <section class="city-book" aria-labelledby="cityBookTitle">
-        <div class="city-book-head wrap"><div><span class="section-tag">Четыре города · одна история</span><h2 id="cityBookTitle">У каждого города<br><em>свой ритм чая.</em></h2></div><p>Бренд остаётся узнаваемым, но глава меняет интонацию. Сочи открывает сеть в приложении первым.</p></div>
-        <div class="city-chapters wrap">${branches.map((b,i)=>`<button class="city-chapter ${b.id===activeBranch.id?"active":""}" data-city-chapter="${b.id}"><span>0${i+1} · ${b.id==="sochi"?"первая глава":"глава сети"}</span><b>${b.city}</b><em>${b.chapter}</em><small>${b.subtitle}</small><i>Открыть →</i></button>`).join("")}</div>
+        <div class="city-book-head wrap"><div><span class="section-tag">Четыре города · одна история</span><h2 id="cityBookTitle">У каждого города<br><em>свой ритм чая.</em></h2></div><p>Один характер бренда и четыре живые интонации. Сочи — первая глава, с которой начинается путешествие по сети.</p></div>
+        <div class="city-chapters wrap">${branches.map((b,i)=>`<button class="city-chapter ${b.id===activeBranch.id?"active":""}" data-city-chapter="${b.id}"><span>0${i+1} · ${b.id==="sochi"?"первая глава":"глава сети"}</span><b>${b.city}</b><em>${b.chapter}</em><small>${b.subtitle}</small><i>Открыть главу <u>↗</u></i></button>`).join("")}</div>
       </section>
 
       <section class="wrap ritual-intro">
-        <div><span class="section-tag">Начни не с меню</span><h2>Скажи,<br>что тебе сейчас <em>нужно.</em></h2></div>
-        <div class="ritual-path"><span>01</span><p><b>Выбери состояние</b>Спокойствие, энергия, ясность или новый вкус.</p><span>02</span><p><b>Познакомься с чаем</b>Легенда, характер листа и честные вкусовые ноты.</p><span>03</span><p><b>Завари правильно</b>Температура, граммовка и живой таймер проливов.</p></div>
+        <div class="ritual-copy"><span class="section-tag">Начните не с меню</span><h2>Скажите,<br>что вам сейчас <em>нужно.</em></h2><p>Чайная карта отвечает не списком позиций, а маршрутом к нужному состоянию.</p><button class="btn ghost" data-go="#/alchemist">Подобрать состояние</button></div>
+        <div class="ritual-path"><article><span>01</span><p><b>Выберите состояние</b>Спокойствие, энергия, ясность или новый вкус.</p></article><article><span>02</span><p><b>Познакомьтесь с чаем</b>Легенда, характер листа и честные вкусовые ноты.</p></article><article><span>03</span><p><b>Заварите правильно</b>Температура, граммовка и живой таймер проливов.</p></article></div>
       </section>
 
       <section class="wrap matcha-stage">
         <div class="matcha-heading"><span class="section-tag">Сезонная линия</span><h2>Маття<br><em>в движении.</em></h2><p>Три напитка, три состояния. Настоящие текстуры, фирменные стаканы и вкус, который хочется забрать с собой.</p></div>
-        <div class="matcha-lineup">${window.MATCHA_DRINKS.map((d, i) => `<article class="matcha-card tone-${d.tone}"><div class="matcha-shot shot-${i}"></div><span>0${i + 1}</span><h3>${d.name}</h3><p>${d.comp}</p><div><b>${UI.rub(d.price)}</b><button data-item="${d.id}" aria-label="Добавить ${d.name}">↘</button></div></article>`).join("")}</div>
+        <div class="matcha-editorial">
+          <figure class="matcha-visual"><img src="img/matcha-lineup-v1.png" alt="Три сезонных напитка маття в фирменных стаканах"><figcaption><span>01—03</span><b>Сезонная глава</b><small>Маття · Сочи · 2026</small></figcaption></figure>
+          <div class="matcha-menu">${window.MATCHA_DRINKS.map((d, i) => `<article class="matcha-card tone-${d.tone}"><span>0${i + 1}</span><div><h3>${d.name}</h3><p>${d.comp}</p></div><b>${UI.rub(d.price)}</b><button data-item="${d.id}" aria-label="Добавить ${d.name}">↘</button></article>`).join("")}</div>
+        </div>
       </section>
 
-      <section class="wrap story-bridge"><div class="ded-large">${UI.dedMark("home-next", "")}</div><div><span class="section-tag">Чайный Дед рядом</span><h2>Обычный чай<br>не нуждается<br><span class="bridge-nowrap">в спецэффектах.</span></h2><p>Ему нужны хороший лист, вода, внимание и история, которую хочется передать дальше.</p><button class="btn ghost" data-go="#/menu">Смотреть чайную карту</button></div></section>
+      <section class="wrap story-bridge"><div class="ded-large">${UI.dedMark("home-next", "")}</div><div><span class="section-tag">Чайный Дед рядом</span><h2>Настоящий чай<br>не нуждается<br><span class="bridge-nowrap">в спецэффектах.</span></h2><p>Ему нужны хороший лист, вода, внимание и история, которую хочется передать дальше.</p><blockquote>«Сначала послушайте воду. Потом — себя.»</blockquote><button class="btn ghost" data-go="#/menu">Смотреть чайную карту</button></div></section>
 
-      <section class="wrap gift-call"><span>Подарить не вещь, а время</span><h2>Сертификат<br>на чайную историю.</h2><button class="btn primary" data-go="#/certificate">Выбрать сертификат</button></section>`;
+      <section class="wrap gift-call"><span>Подарить не вещь, а время</span><h2>Сертификат<br>на чайную историю.</h2><p>Пауза, которая останется в памяти дольше подарочной упаковки.</p><button class="btn primary" data-go="#/certificate">Выбрать сертификат</button></section>`;
     return { html, mount(root) { goMount(root);root.querySelector("[data-city-open]")?.addEventListener("click",()=>App.openCityPicker());root.querySelectorAll("[data-city-chapter]").forEach((button)=>button.addEventListener("click",async()=>{const result=await Branches.select(button.dataset.cityChapter);if(!result.ok){UI.toast(result.error);return;}await Auth.refreshTeam?.(result.branch.id);App.render();})); root.querySelectorAll("[data-item]").forEach((b) => b.addEventListener("click", () => App.addMenuItem(b.dataset.item))); } };
   };
 

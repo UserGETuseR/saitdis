@@ -34,14 +34,18 @@ window.App = (function () {
 
   let root;
   let motionObserver;
+  let motionController;
 
   function mountMotion() {
     if (!root) return;
     if (motionObserver) motionObserver.disconnect();
+    if (motionController) motionController.abort();
+    motionController = new AbortController();
+    const signal = motionController.signal;
     root.classList.remove("view-mounted");
     const targets = root.querySelectorAll([
-      ".city-book-head", ".city-chapter", ".ritual-intro > div",
-      ".matcha-heading", ".matcha-card", ".story-bridge > div",
+      ".story-ribbon > *", ".story-metrics > *", ".city-book-head", ".city-chapter",
+      ".ritual-copy", ".ritual-path article", ".matcha-heading", ".matcha-visual", ".matcha-card", ".story-bridge > div",
       ".gift-call > *", ".grid > *", ".dash-grid > *",
       ".guide-grid > *", ".network-card", ".work-form", ".work-list"
     ].join(","));
@@ -58,6 +62,36 @@ window.App = (function () {
         });
       }, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
       targets.forEach((node) => motionObserver.observe(node));
+    }
+    let frame = 0;
+    const paintScroll = () => {
+      frame = 0;
+      const max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      const progress = Math.max(0, Math.min(1, window.scrollY / max));
+      document.body.style.setProperty("--page-read", progress.toFixed(4));
+      const hero = root.querySelector(".story-hero");
+      if (hero) hero.style.setProperty("--hero-scroll", `${Math.min(window.scrollY, hero.offsetHeight)}px`);
+    };
+    const queueScroll = () => {
+      if (!frame) frame = requestAnimationFrame(paintScroll);
+    };
+    window.addEventListener("scroll", queueScroll, { passive: true, signal });
+    window.addEventListener("resize", queueScroll, { passive: true, signal });
+    paintScroll();
+
+    const photo = root.querySelector(".story-photo-frame");
+    if (photo && !reduced && window.matchMedia("(pointer:fine)").matches) {
+      photo.addEventListener("pointermove", (event) => {
+        const box = photo.getBoundingClientRect();
+        const x = (event.clientX - box.left) / box.width - .5;
+        const y = (event.clientY - box.top) / box.height - .5;
+        photo.style.setProperty("--hero-ry", `${(x * 4.5).toFixed(2)}deg`);
+        photo.style.setProperty("--hero-rx", `${(-y * 3.2).toFixed(2)}deg`);
+      }, { passive: true, signal });
+      photo.addEventListener("pointerleave", () => {
+        photo.style.setProperty("--hero-ry", "0deg");
+        photo.style.setProperty("--hero-rx", "0deg");
+      }, { signal });
     }
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add("view-mounted")));
   }
