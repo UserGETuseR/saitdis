@@ -33,6 +33,34 @@ window.App = (function () {
   };
 
   let root;
+  let motionObserver;
+
+  function mountMotion() {
+    if (!root) return;
+    if (motionObserver) motionObserver.disconnect();
+    root.classList.remove("view-mounted");
+    const targets = root.querySelectorAll([
+      ".city-book-head", ".city-chapter", ".ritual-intro > div",
+      ".matcha-heading", ".matcha-card", ".story-bridge > div",
+      ".gift-call > *", ".grid > *", ".dash-grid > *",
+      ".guide-grid > *", ".network-card", ".work-form", ".work-list"
+    ].join(","));
+    targets.forEach((node) => node.classList.add("motion-item"));
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || !("IntersectionObserver" in window)) {
+      targets.forEach((node) => node.classList.add("motion-in"));
+    } else {
+      motionObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("motion-in");
+          motionObserver.unobserve(entry.target);
+        });
+      }, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
+      targets.forEach((node) => motionObserver.observe(node));
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add("view-mounted")));
+  }
 
   function currentPath() {
     const h = window.location.hash.replace(/^#/, "");
@@ -54,6 +82,7 @@ window.App = (function () {
     window.scrollTo(0, 0);
     renderChrome(path);
     updateCartBadge();
+    mountMotion();
   }
 
   // ----- Навигация по ролям -----
