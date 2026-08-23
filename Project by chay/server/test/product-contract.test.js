@@ -29,6 +29,30 @@ test("production schema persists loyalty and integration outbox",()=>{
   assert.match(schema,/idempotency_key text not null unique/i);
 });
 
+test("inventory accounting keeps an immutable movement ledger prepared for 1C",()=>{
+  const schema=fs.readFileSync(path.join(root,"server/sql/001_production.sql"),"utf8");
+  const repository=fs.readFileSync(path.join(root,"server/src/repository.js"),"utf8");
+  const api=fs.readFileSync(path.join(root,"server/src/production-server.js"),"utf8");
+  assert.match(schema,/create table if not exists chay_inventory_movements/i);
+  assert.match(schema,/stock_before numeric[\s\S]*stock_after numeric/i);
+  assert.match(repository,/applyInventoryMovement/);
+  assert.match(repository,/inventory\.movement/);
+  assert.match(api,/\/api\/inventory\/movements/);
+});
+
+test("editorial workflow persists drafts and exposes only published public chapters",()=>{
+  const schema=fs.readFileSync(path.join(root,"server/sql/001_production.sql"),"utf8");
+  const repository=fs.readFileSync(path.join(root,"server/src/repository.js"),"utf8");
+  const api=fs.readFileSync(path.join(root,"server/src/production-server.js"),"utf8");
+  const app=fs.readFileSync(path.join(root,"assets/js/app.js"),"utf8");
+  assert.match(schema,/create table if not exists chay_publications/i);
+  assert.match(schema,/status text not null default 'draft'[\s\S]*draft'[\s\S]*review'[\s\S]*published'[\s\S]*archived'/i);
+  assert.match(repository,/status='published' and audience='public'/);
+  assert.match(repository,/Мастер может редактировать только свои материалы/);
+  assert.match(api,/\/api\/public\/publications/);
+  assert.match(app,/"\/journal": Views\.journal/);
+});
+
 test("network model starts with Sochi and persists all four city chapters",()=>{
   const schema=fs.readFileSync(path.join(root,"server/sql/001_production.sql"),"utf8");
   assert.match(schema,/create table if not exists chay_branches/i);

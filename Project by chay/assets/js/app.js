@@ -7,6 +7,7 @@ window.App = (function () {
     "/elixirs": Views.elixirs,
     "/menu": Views.menu,
     "/events": Views.events,
+    "/journal": Views.journal,
     "/mushrooms": Views.mushrooms,
     "/passport": Views.passport,
     "/meditate": Views.meditate,
@@ -47,7 +48,7 @@ window.App = (function () {
       ".story-ribbon > *", ".story-metrics > *", ".city-book-head", ".city-chapter",
       ".ritual-copy", ".ritual-path article", ".matcha-heading", ".matcha-visual", ".matcha-card", ".story-bridge > div",
       ".gift-call > *", ".grid > *", ".dash-grid > *",
-      ".guide-grid > *", ".network-card", ".work-form", ".work-list"
+      ".guide-grid > *", ".network-card", ".work-form", ".work-list", ".journal-card", ".editorial-command", ".publication-row"
     ].join(","));
     targets.forEach((node) => node.classList.add("motion-item"));
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -98,7 +99,7 @@ window.App = (function () {
 
   function currentPath() {
     const h = window.location.hash.replace(/^#/, "");
-    return h || "/";
+    return (h || "/").split("?")[0];
   }
 
   function render() {
@@ -128,6 +129,7 @@ window.App = (function () {
       elx: { route: "/elixirs", icon: "bi-droplet-half", label: "Эликсиры" },
       menu: { route: "/menu", icon: "bi-cup-hot", label: "Меню" },
       events: { route: "/events", icon: "bi-calendar-event", label: "Афиша" },
+      journal: { route: "/journal", icon: "bi-journal-text", label: "Журнал" },
       mush: { route: "/mushrooms", icon: "bi-flower1", label: "Грибы" },
       med: { route: "/meditate", icon: "bi-wind", label: "Практики" },
       brew: { route: "/brew", icon: "bi-hourglass-split", label: "Заварить" },
@@ -139,9 +141,9 @@ window.App = (function () {
       master: { route: "/master", icon: "bi-grid", label: "Кабинет" },
       admin: { route: "/admin", icon: "bi-speedometer2", label: "Управление" },
     };
-    if (!u) return { links: [L.home, L.brew, L.menu, L.events, L.cert], tab: [L.home, L.brew, L.menu, L.events, L.cert] };
-    if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.menu, L.events, L.med], tab: [L.admin, L.team, L.menu, L.events, L.med] };
-    if (u.role === "master") return { links: [L.master, L.team, L.brew, L.menu, L.med], tab: [L.master, L.team, L.brew, L.menu, L.med] };
+    if (!u) return { links: [L.home, L.journal, L.brew, L.menu, L.events, L.cert], tab: [L.home, L.brew, L.menu, L.events, L.cert] };
+    if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.journal, L.menu, L.events, L.med], tab: [L.admin, L.team, L.menu, L.events, L.med] };
+    if (u.role === "master") return { links: [L.master, L.team, L.journal, L.brew, L.menu, L.med], tab: [L.master, L.team, L.brew, L.menu, L.med] };
     return { links: [L.client, L.messages, L.brew, L.menu, L.cert, L.pass], tab: [L.client, L.messages, L.brew, L.cert, L.pass] };
   }
 

@@ -1621,26 +1621,37 @@ Views.admin = function () {
   /* ——— СКЛАД ——— */
   function panelStock() {
     const all = Inventory.all();
-    const teas = all.filter((r) => r.kind === "tea");
-    const mush = all.filter((r) => r.kind === "mushroom");
+    const history = Inventory.history(36);
+    const low = all.filter((r) => Number(r.stock) <= Number(r.par));
+    const healthy = all.length - low.length;
+    const kindLabel = {tea:"Чай",mushroom:"Грибы",drink:"Напитки",supply:"Расходники",other:"Другое"};
+    const typeLabel = Inventory.TYPE;
     const stockRow = (r) => {
-      const low = r.stock <= r.par;
+      const isLow = Number(r.stock) <= Number(r.par);
+      const ratio = Number(r.par) > 0 ? Math.min(100,Math.round(Number(r.stock)/Number(r.par)*100)) : 100;
       return `
-        <div class="db-row stock-row ${low ? "low" : ""}">
-          <span class="db-name"><i class="bi ${r.kind === "tea" ? "bi-cup-hot" : "bi-flower1"}"></i> ${r.name}</span>
-          <span class="stock-val ${low ? "warn" : ""}">${r.stock} ${r.unit}${low ? ' <i class="bi bi-exclamation-triangle"></i>' : ""}</span>
-          <span class="stock-ctl">
-            <button class="ic-btn" data-stock-minus="${r.id}" title="−50">−</button>
-            <button class="ic-btn" data-stock-plus="${r.id}" title="+100">+</button>
-          </span>
+        <div class="stock-ledger-row ${isLow ? "low" : ""}" data-stock-row data-search="${(r.name+" "+r.catalogId+" "+kindLabel[r.kind]).toLowerCase()}">
+          <span class="stock-code">${r.catalogId}</span>
+          <span class="stock-title"><b>${r.name}</b><small>${kindLabel[r.kind]||"Другое"} · минимум ${r.par} ${r.unit}</small></span>
+          <span class="stock-balance"><b>${r.stock}</b><small>${r.unit}</small><i style="--stock-level:${ratio}%"></i></span>
+          <span class="stock-state">${isLow?"Нужно внимание":"В норме"}</span>
+          <button class="stock-action" data-stock-select="${r.id}">Провести движение</button>
+          ${isLow?`<button class="stock-request" data-stock-request="${r.id}">Заявка</button>`:""}
         </div>`;
     };
+    const movementRow=(m)=>`<article class="movement-row"><span>${new Date(m.createdAt).toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span><div><b>${typeLabel[m.type]||m.type}</b><small>${all.find((x)=>x.id===m.inventoryId)?.name||m.catalogId}</small></div><strong class="${m.quantity>0?"plus":"minus"}">${m.quantity>0?"+":""}${m.quantity}</strong><div><b>${m.stockBefore} → ${m.stockAfter}</b><small>${m.reason||"Без комментария"}${m.documentRef?` · ${m.documentRef}`:""}</small></div><em>${m.actorName||"Система"}</em></article>`;
     return `
-      <p class="muted" style="margin-bottom:8px">Кнопки корректируют остаток: <b>−</b> списать 50, <b>+</b> пополнить 100. Красным — ниже целевого запаса.</p>
-      <h3 class="cat-h"><i class="bi bi-cup-hot"></i> Чай <span class="addon">${teas.length} позиций</span></h3>
-      <div class="db-table stock-table">${teas.map(stockRow).join("")}</div>
-      <h3 class="cat-h"><i class="bi bi-flower1"></i> Грибные экстракты <span class="addon">${mush.length} позиций</span></h3>
-      <div class="db-table stock-table">${mush.map(stockRow).join("")}</div>
+      <section class="stock-console">
+        <header class="stock-command"><div><span class="section-tag">Внутренний учёт · ${Branches.current()?.city||"Сочи"}</span><h2>Каждая единица<br><em>имеет историю.</em></h2><p>Остаток меняется только через документ движения. Автор, причина и баланс до/после сохраняются для контроля и будущего обмена с 1С.</p></div><img src="БРЕНБУК/assets/mark-color.png" alt="" aria-hidden="true"></header>
+        <div class="stock-metrics"><article><span>Номенклатура</span><b>${all.length}</b><small>активных позиций</small></article><article><span>В норме</span><b>${healthy}</b><small>выше минимального запаса</small></article><article class="${low.length?"attention":""}"><span>Дефицит</span><b>${low.length}</b><small>требуют решения</small></article><article><span>Документы</span><b>${history.length}</b><small>в текущем журнале</small></article></div>
+        <div class="stock-forms">
+          <form id="stockMovementForm" class="stock-form primary-ledger"><span class="section-tag">Новый документ</span><h3>Провести движение</h3><label>Позиция<select name="inventoryId" required>${all.map((r)=>`<option value="${r.id}">${r.name} · ${r.stock} ${r.unit}</option>`).join("")}</select></label><div class="stock-form-row"><label>Операция<select name="type"><option value="receipt">Поступление</option><option value="writeoff">Списание</option><option value="stocktake">Инвентаризация</option><option value="correction">Корректировка</option><option value="transfer_in">Перемещение · приход</option><option value="transfer_out">Перемещение · расход</option></select></label><label>Количество<input name="quantity" type="number" step="0.001" required placeholder="0"></label></div><label>Основание<input name="reason" required placeholder="Поставка, бой, пересчёт..."></label><label>Документ / накладная<input name="documentRef" placeholder="Например: УПД-184"></label><button class="btn primary" ${all.length?"":"disabled"}>Записать в журнал</button><small>Для инвентаризации укажите фактический остаток. Для остальных операций — количество движения.</small></form>
+          <form id="stockItemForm" class="stock-form"><span class="section-tag">Номенклатура</span><h3>Добавить позицию</h3><label>Название<input name="name" required placeholder="Например: стакан 400 мл"></label><div class="stock-form-row"><label>Тип<select name="kind"><option value="tea">Чай</option><option value="mushroom">Грибной экстракт</option><option value="drink">Напиток</option><option value="supply">Расходник</option><option value="other">Другое</option></select></label><label>Единица<input name="unit" required value="шт"></label></div><div class="stock-form-row"><label>Начальный остаток<input name="stock" type="number" min="0" step="0.001" value="0"></label><label>Минимум<input name="par" type="number" min="0" step="0.001" value="10"></label></div><label>Код для 1С<input name="catalogId" placeholder="Оставьте пустым для автокода"></label><button class="btn ghost">Добавить в справочник</button></form>
+        </div>
+        <div class="stock-register-head"><div><span class="section-tag">Живой остаток</span><h3>Номенклатура</h3></div><label class="stock-search"><span>Поиск</span><input id="stockSearch" type="search" placeholder="Название или код"></label><button id="stockExport" class="btn ghost">Выгрузить CSV</button></div>
+        <div class="stock-ledger">${all.map(stockRow).join("")||"<p class=muted>Добавьте первую позицию в справочник.</p>"}</div>
+        <div class="movement-register"><div class="stock-register-head"><div><span class="section-tag">Неизменяемый журнал</span><h3>Последние движения</h3></div><small>готово к передаче в 1С</small></div><div class="movement-head"><span>Дата</span><span>Операция</span><span>Δ</span><span>Остаток и основание</span><span>Автор</span></div>${history.map(movementRow).join("")||"<p class=muted>Первое движение появится здесь.</p>"}</div>
+      </section>
     `;
   }
 
@@ -1714,7 +1725,8 @@ Views.admin = function () {
     mount(root) {
       const tabsEl = root.querySelector("#adminTabs");
       const panel = root.querySelector("#adminPanel");
-      let current = "overview";
+      const requestedTab=new URLSearchParams((location.hash.split("?")[1]||"")).get("tab");
+      let current = PANELS[requestedTab] ? requestedTab : "overview";
 
       function bindPanel() {
         // навигация по вкладкам изнутри карточек
@@ -1727,11 +1739,15 @@ Views.admin = function () {
         panel.querySelectorAll("[data-cancel]").forEach((b) =>
           b.addEventListener("click", () => { Orders.setStatus(b.dataset.cancel, "cancelled"); UI.toast("Заказ отменён"); renderPanel(); }));
 
-        // склад
-        panel.querySelectorAll("[data-stock-plus]").forEach((b) =>
-          b.addEventListener("click", () => { Inventory.adjust(b.dataset.stockPlus, +100); renderPanel(); }));
-        panel.querySelectorAll("[data-stock-minus]").forEach((b) =>
-          b.addEventListener("click", () => { Inventory.adjust(b.dataset.stockMinus, -50); renderPanel(); }));
+        // склад: документ движения, справочник, заявка и выгрузка
+        const movementForm=panel.querySelector("#stockMovementForm");
+        if(movementForm)movementForm.addEventListener("submit",async(event)=>{event.preventDefault();const button=movementForm.querySelector("button");button.disabled=true;try{await Inventory.move(Object.fromEntries(new FormData(movementForm).entries()));UI.toast("Движение записано и поставлено в обмен с 1С");renderPanel();}catch(error){UI.toast(error.message);button.disabled=false;}});
+        const itemForm=panel.querySelector("#stockItemForm");
+        if(itemForm)itemForm.addEventListener("submit",async(event)=>{event.preventDefault();try{const data=Object.fromEntries(new FormData(itemForm).entries()),initialStock=Math.max(0,Number(data.stock)||0);const item=Inventory.createItem(data);if(ApiClient.isReady())await ApiClient.whenSynced("inventory",item.id);if(initialStock>0)await Inventory.move({inventoryId:item.id,type:"stocktake",quantity:initialStock,reason:"Постановка на учёт"});UI.toast("Позиция добавлена в справочник и журнал");renderPanel();}catch(error){UI.toast(error.message);}});
+        panel.querySelectorAll("[data-stock-select]").forEach((button)=>button.onclick=()=>{const select=panel.querySelector('#stockMovementForm select[name="inventoryId"]');if(select){select.value=button.dataset.stockSelect;select.focus();movementForm.scrollIntoView({behavior:"smooth",block:"center"});}});
+        panel.querySelectorAll("[data-stock-request]").forEach((button)=>button.onclick=()=>{const item=Inventory.byId(button.dataset.stockRequest);Operations.createRequest({type:"stock",title:`Пополнить: ${item.name}`,details:`Текущий остаток ${item.stock} ${item.unit}, минимальный запас ${item.par} ${item.unit}.`,urgency:"high"});UI.toast("Заявка на пополнение передана дальше");});
+        const search=panel.querySelector("#stockSearch");if(search)search.oninput=()=>{const query=search.value.trim().toLowerCase();panel.querySelectorAll("[data-stock-row]").forEach((row)=>row.hidden=query&&!row.dataset.search.includes(query));};
+        const exportButton=panel.querySelector("#stockExport");if(exportButton)exportButton.onclick=()=>{const rows=[["Код","Название","Тип","Остаток","Единица","Минимум"],...Inventory.all().map((r)=>[r.catalogId,r.name,r.kind,r.stock,r.unit,r.par])];const csv="\ufeff"+rows.map((row)=>row.map((value)=>`"${String(value).replace(/"/g,'""')}"`).join(";")).join("\n");const link=document.createElement("a");link.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));link.download=`chay-inventory-${Branches.current()?.id||"sochi"}.csv`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),500);};
 
         // персонал
         panel.querySelectorAll("[data-promote]").forEach((b) =>
@@ -1767,6 +1783,7 @@ Views.admin = function () {
       tabsEl.querySelectorAll("[data-atab]").forEach((t) =>
         t.addEventListener("click", () => switchTab(t.dataset.atab)));
 
+      tabsEl.querySelectorAll(".atab").forEach((t) => t.classList.toggle("active",t.dataset.atab===current));
       renderPanel();
     },
   };

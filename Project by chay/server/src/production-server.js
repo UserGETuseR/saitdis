@@ -116,6 +116,7 @@ async function route(req, res) {
     await repo.health(); return json(res, 200, { ok:true, service:"chay-api", version:1 });
   }
   if (req.method === "GET" && path === "/api/branches") return json(res,200,{ok:true,items:await repo.listBranches()});
+  if (req.method === "GET" && path === "/api/public/publications") return json(res,200,{ok:true,items:await repo.publicPublications(url.searchParams.get("branch")||null)});
   if (req.method === "GET" && path === "/api/auth/me") return json(res, 200, { ok:true, user:who ? { ...who, sessionToken:undefined } : null, cloud:true });
 
   if (req.method === "POST" && path === "/api/auth/register") {
@@ -169,6 +170,11 @@ async function route(req, res) {
   if (req.method === "GET" && path === "/api/branches/summary") { const current=requireRole(who,STAFF);return json(res,200,{ok:true,items:await repo.branchSummaries(current)}); }
   if (req.method === "GET" && path === "/api/loyalty") { const current=requireActor(who); return json(res,200,{ok:true,loyalty:await repo.loyalty(current.id)}); }
   if(req.method==="GET"&&path==="/api/integrations/1c/status"){requireRole(who,ADMIN);let probe=null;if(url.searchParams.get("probe")==="1"&&oneC.configured){try{const result=await oneC.probe();probe={ok:true,status:result.status};}catch(error){probe={ok:false,error:error.message};}}return json(res,200,{ok:true,integration:{...oneC.publicConfig,queue:await repo.oneCQueueStatus(),probe}});}
+  if(req.method==="POST"&&path==="/api/inventory/movements"){
+    const current=requireRole(who,ADMIN);const data=await body(req);
+    const result=await repo.applyInventoryMovement(current,{id:safeId(data.id,"mov"),inventoryId:safeId(data.inventoryId,"inv"),branchId:data.branchId,type:data.type,quantity:data.quantity,reason:data.reason,documentRef:data.documentRef,createdAt:data.createdAt});
+    return json(res,201,{ok:true,...result});
+  }
   const loyaltyMatch=path.match(/^\/api\/loyalty\/([^/]+)\/adjust$/);
   if(req.method==="POST"&&loyaltyMatch){const current=requireRole(who,STAFF);const data=await body(req);const delta=Number(data.delta);if(!Number.isInteger(delta)||delta===0||Math.abs(delta)>100)throw Object.assign(new Error("Изменение должно быть целым числом от -100 до 100"),{status:400});const target=await repo.userById(loyaltyMatch[1]);if(!target||target.role!=="client"||current.role!=="owner"&&target.branch_id!==current.branchId)throw Object.assign(new Error("Гость этого города не найден"),{status:404});const loyalty=await repo.adjustLoyalty({userId:target.id,delta,kind:delta<0?"redeem":"manual",note:String(data.note||"").slice(0,500),actorId:current.id});await repo.audit(current.id,"loyalty_adjust","user",target.id,null,{delta,note:data.note||""});return json(res,200,{ok:true,loyalty});}
   const roleMatch=path.match(/^\/api\/users\/([^/]+)\/role$/);
@@ -185,7 +191,7 @@ async function route(req, res) {
   }
 
   const recordMatch=path.match(/^\/api\/records\/([a-z_]+)(?:\/([^/]+))?$/);
-  if(recordMatch){const name=recordMatch[1],id=recordMatch[2];const current=requireActor(who);const staffOnly=new Set(["staff_requests","shift_reports","service_guides","inventory","shifts"]);if(staffOnly.has(name))requireRole(current,STAFF);if(req.method==="GET"&&!id)return json(res,200,{ok:true,items:await repo.records.list(name,current)});if(req.method==="PUT"&&!id){const data=await body(req);if(name==="certificates"){requireRole(current,STAFF);if(!CERTIFICATE_STATUSES.has(String(data.status||"")))throw Object.assign(new Error("Некорректный статус сертификата"),{status:400});}if(["inventory","shifts"].includes(name))requireRole(current,ADMIN);if(name==="orders"&&current.role==="client")throw Object.assign(new Error("Недостаточно прав"),{status:403});await repo.records.upsert(name,data,current);return json(res,200,{ok:true,id:data.id});}if(req.method==="DELETE"&&id){if(["certificates","inventory","shifts"].includes(name))requireRole(current,ADMIN);else requireRole(current,STAFF);await repo.records.remove(name,id,current);return json(res,200,{ok:true});}}
+  if(recordMatch){const name=recordMatch[1],id=recordMatch[2];const current=requireActor(who);const staffOnly=new Set(["staff_requests","shift_reports","service_guides","inventory","inventory_movements","publications","shifts"]);if(staffOnly.has(name))requireRole(current,STAFF);if(req.method==="GET"&&!id)return json(res,200,{ok:true,items:await repo.records.list(name,current)});if(req.method==="PUT"&&!id){const data=await body(req);if(name==="certificates"){requireRole(current,STAFF);if(!CERTIFICATE_STATUSES.has(String(data.status||"")))throw Object.assign(new Error("Некорректный статус сертификата"),{status:400});}if(["inventory","shifts"].includes(name))requireRole(current,ADMIN);if(name==="inventory_movements")throw Object.assign(new Error("Движения создаются через журнал учёта"),{status:405});if(name==="orders"&&current.role==="client")throw Object.assign(new Error("Недостаточно прав"),{status:403});await repo.records.upsert(name,data,current);return json(res,200,{ok:true,id:data.id});}if(req.method==="DELETE"&&id){if(name==="inventory_movements")throw Object.assign(new Error("Документы движения не удаляются"),{status:405});if(["certificates","inventory","shifts"].includes(name))requireRole(current,ADMIN);else requireRole(current,STAFF);await repo.records.remove(name,id,current);return json(res,200,{ok:true});}}
 
   return json(res,404,{ok:false,error:"Маршрут не найден"});
 }

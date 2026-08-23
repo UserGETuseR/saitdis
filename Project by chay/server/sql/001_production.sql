@@ -181,6 +181,45 @@ alter table chay_inventory alter column catalog_id set not null;
 create index if not exists chay_inventory_branch on chay_inventory(branch_id,kind,name);
 create unique index if not exists chay_inventory_branch_catalog on chay_inventory(branch_id,catalog_id);
 
+create table if not exists chay_inventory_movements (
+  id text primary key,
+  inventory_id text not null references chay_inventory(id) on delete restrict,
+  branch_id text not null references chay_branches(id),
+  catalog_id text not null,
+  movement_type text not null check (movement_type in ('receipt','writeoff','sale','stocktake','correction','transfer_in','transfer_out')),
+  quantity numeric(14,3) not null check (quantity <> 0),
+  stock_before numeric(14,3) not null,
+  stock_after numeric(14,3) not null check (stock_after >= 0),
+  reason text not null default '',
+  document_ref text,
+  actor_id text references chay_users(id) on delete set null,
+  actor_name text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists chay_inventory_movements_branch on chay_inventory_movements(branch_id,created_at desc);
+create index if not exists chay_inventory_movements_item on chay_inventory_movements(inventory_id,created_at desc);
+
+create table if not exists chay_publications (
+  id text primary key,
+  branch_id text not null references chay_branches(id),
+  author_id text references chay_users(id) on delete set null,
+  author_name text not null,
+  title text not null,
+  slug text not null unique,
+  excerpt text not null default '',
+  body text not null,
+  cover_url text not null default '',
+  kind text not null default 'news' check (kind in ('news','story','tea','event')),
+  audience text not null default 'public' check (audience in ('public','team')),
+  status text not null default 'draft' check (status in ('draft','review','published','archived')),
+  featured boolean not null default false,
+  published_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists chay_publications_public on chay_publications(status,audience,published_at desc);
+create index if not exists chay_publications_branch on chay_publications(branch_id,status,updated_at desc);
+
 create table if not exists chay_orders (
   id text primary key,
   user_id text references chay_users(id) on delete set null,

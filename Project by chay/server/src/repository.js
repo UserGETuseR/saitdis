@@ -78,6 +78,42 @@ function createRepository(connectionString) {
   async function nextOneCItems(limit=20){return (await q("update chay_integration_outbox set status='processing',attempts=attempts+1,updated_at=now() where id in (select id from chay_integration_outbox where integration='1c' and (status in ('pending','failed') or (status='processing' and updated_at<now()-interval '10 minutes')) and next_attempt_at<=now() order by id for update skip locked limit $1) returning *",[limit])).rows;}
   async function finishOneCItem(id,error){if(error)await q("update chay_integration_outbox set status='failed',last_error=$2,next_attempt_at=now()+(least(attempts,8)*interval '5 minutes'),updated_at=now() where id=$1",[id,String(error).slice(0,1000)]);else await q("update chay_integration_outbox set status='sent',last_error=null,sent_at=now(),updated_at=now() where id=$1",[id]);}
 
+  function inventoryMovement(row) {
+    return row ? { id:row.id,inventoryId:row.inventory_id,branchId:row.branch_id,catalogId:row.catalog_id,type:row.movement_type,quantity:Number(row.quantity),stockBefore:Number(row.stock_before),stockAfter:Number(row.stock_after),reason:row.reason||"",documentRef:row.document_ref||"",actorId:row.actor_id,actorName:row.actor_name,createdAt:+new Date(row.created_at) } : null;
+  }
+
+  function publication(row) {
+    return row ? { id:row.id,branchId:row.branch_id,authorId:row.author_id,authorName:row.author_name,title:row.title,slug:row.slug,excerpt:row.excerpt||"",body:row.body,coverUrl:row.cover_url||"",kind:row.kind,audience:row.audience,status:row.status,featured:row.featured,publishedAt:row.published_at?+new Date(row.published_at):null,createdAt:+new Date(row.created_at),updatedAt:+new Date(row.updated_at) } : null;
+  }
+
+  async function applyInventoryMovement(actor, data) {
+    const branchId = await operationBranch(actor, data.branchId);
+    const type = String(data.type || "correction");
+    const allowed = new Set(["receipt","writeoff","sale","stocktake","correction","transfer_in","transfer_out"]);
+    if (!allowed.has(type)) throw Object.assign(new Error("Некорректный тип движения"), { status:400 });
+    const quantity = Number(data.quantity);
+    if (!Number.isFinite(quantity) || quantity === 0 || Math.abs(quantity) > 1000000) throw Object.assign(new Error("Укажите ненулевое количество"), { status:400 });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const item = (await client.query("select * from chay_inventory where id=$1 and branch_id=$2 for update", [data.inventoryId,branchId])).rows[0];
+      if (!item) throw Object.assign(new Error("Позиция склада не найдена"), { status:404 });
+      const before = Number(item.stock);
+      const delta = type === "stocktake" ? quantity - before : ["writeoff","sale","transfer_out"].includes(type) ? -Math.abs(quantity) : ["receipt","transfer_in"].includes(type) ? Math.abs(quantity) : quantity;
+      const after = Math.round((before + delta) * 1000) / 1000;
+      if (after < 0) throw Object.assign(new Error("Остаток не может стать отрицательным"), { status:409 });
+      const movement = (await client.query("insert into chay_inventory_movements(id,inventory_id,branch_id,catalog_id,movement_type,quantity,stock_before,stock_after,reason,document_ref,actor_id,actor_name,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,to_timestamp($13/1000.0)) returning *", [data.id,data.inventoryId,branchId,item.catalog_id,type,delta,before,after,String(data.reason||"").slice(0,500),String(data.documentRef||"").slice(0,120)||null,actor.id,actor.name,Number(data.createdAt)||Date.now()])).rows[0];
+      const updated = (await client.query("update chay_inventory set stock=$2,updated_by=$3,updated_at=now() where id=$1 returning *", [item.id,after,actor.id])).rows[0];
+      const payload = { movementId:movement.id,inventoryId:item.id,branchId,catalogId:item.catalog_id,type,quantity:delta,stockBefore:before,stockAfter:after,reason:movement.reason,documentRef:movement.document_ref,actorId:actor.id,createdAt:+new Date(movement.created_at) };
+      const key = `inventory.movement:inventory:${movement.id}:${cryptoVersion(payload)}`;
+      await client.query("insert into chay_integration_outbox(event_type,entity_type,entity_id,payload,idempotency_key) values('inventory.movement','inventory',$1,$2,$3) on conflict(idempotency_key) do nothing", [movement.id,JSON.stringify(payload),key]);
+      await client.query("insert into chay_audit_log(actor_id,action,entity_type,entity_id,before_data,after_data) values($1,'inventory_movement','inventory',$2,$3,$4)", [actor.id,item.id,JSON.stringify({stock:before}),JSON.stringify({stock:after,movementId:movement.id,type,quantity:delta})]);
+      await client.query("commit");
+      return { movement:inventoryMovement(movement), inventory:{ id:updated.id,branchId:updated.branch_id,catalogId:updated.catalog_id,kind:updated.kind,name:updated.name,unit:updated.unit,stock:Number(updated.stock),par:Number(updated.par),cat:updated.cat,createdAt:+new Date(updated.updated_at) } };
+    } catch (error) { await client.query("rollback").catch(()=>{}); throw error; }
+    finally { client.release(); }
+  }
+
   const records = {
     async list(name, actor) {
       const branchId=actor.branch_id||actor.branchId||"sochi", owner=actor.role==="owner";
@@ -87,6 +123,8 @@ function createRepository(connectionString) {
       if (name === "certificates") return (await q("select * from chay_certificates where buyer_id=$1 or ($2 in ('master','admin','owner') and ($3 or branch_id=$4)) order by created_at desc limit 300", [actor.id, actor.role,owner,branchId])).rows.map((r) => ({ id:r.id,branchId:r.branch_id,buyerId:r.buyer_id,buyerName:r.buyer_name,recipientName:r.recipient_name,phone:r.phone,amount:Number(r.amount),wish:r.wish,code:r.code,status:r.status,contactNote:r.contact_note||"",statusHistory:r.status_history||[],confirmedAt:r.confirmed_at?+new Date(r.confirmed_at):null,createdAt:+new Date(r.created_at),updatedAt:+new Date(r.updated_at) }));
       if (name === "service_guides") return (await q("select * from chay_guides where active=true order by position,id")).rows.map((r) => ({ id:r.id,title:r.title,tag:r.tag,text:r.body,createdAt:+new Date(r.updated_at) }));
       if (name === "inventory") return (await q("select * from chay_inventory where $1 or branch_id=$2 order by branch_id,kind,name",[owner,branchId])).rows.map((r) => ({ id:r.id,branchId:r.branch_id,catalogId:r.catalog_id,kind:r.kind,name:r.name,unit:r.unit,stock:Number(r.stock),par:Number(r.par),cat:r.cat,createdAt:+new Date(r.updated_at) }));
+      if (name === "inventory_movements") return (await q("select * from chay_inventory_movements where $1 or branch_id=$2 order by created_at desc limit 800",[owner,branchId])).rows.map(inventoryMovement);
+      if (name === "publications") return (await q("select * from chay_publications where $1 or branch_id=$2 or author_id=$3 order by updated_at desc limit 500",[owner,branchId,actor.id])).rows.map(publication);
       if (name === "orders") {
         const result = actor.role === "client" ? await q("select * from chay_orders where user_id=$1 order by created_at desc limit 500", [actor.id]) : await q("select * from chay_orders where $1 or branch_id=$2 order by created_at desc limit 500",[owner,branchId]);
         return result.rows.map((r) => ({ id:r.id,branchId:r.branch_id,userId:r.user_id,userName:r.user_name,masterId:r.master_id,channel:r.channel,status:r.status,items:r.items,total:Number(r.total),ts:+new Date(r.created_at),createdAt:+new Date(r.created_at) }));
@@ -117,6 +155,20 @@ function createRepository(connectionString) {
         row = await one("insert into chay_certificates(id,buyer_id,branch_id,buyer_name,recipient_name,phone,amount,wish,code,status,contact_note,status_history,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12,jsonb_build_array(jsonb_build_object('status',$10,'at',$11,'by',$13)),to_timestamp($11/1000.0)) on conflict(id) do update set status=excluded.status,contact_note=excluded.contact_note,status_history=case when chay_certificates.status<>excluded.status then chay_certificates.status_history || jsonb_build_array(jsonb_build_object('status',excluded.status,'at',$11,'by',$13)) else chay_certificates.status_history end,confirmed_by=case when excluded.status='confirmed' then $2 else chay_certificates.confirmed_by end,confirmed_at=case when excluded.status='confirmed' then now() else chay_certificates.confirmed_at end,updated_at=now() returning *", [id,data.buyerId||actor.id,branchId,String(data.buyerName||actor.name).slice(0,120),String(data.recipientName||"").slice(0,120),String(data.phone||"").slice(0,40),Number(data.amount),String(data.wish||"").slice(0,1000),String(data.code||"").slice(0,30),nextStatus,Number(data.updatedAt||data.createdAt)||Date.now(),String(data.contactNote||"").slice(0,1000),actor.name]);
       }
       else if (name === "inventory") {row = await one("insert into chay_inventory(id,branch_id,catalog_id,kind,name,unit,stock,par,cat,updated_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(id) do update set kind=excluded.kind,name=excluded.name,unit=excluded.unit,stock=excluded.stock,par=excluded.par,cat=excluded.cat,updated_by=excluded.updated_by,updated_at=now() returning *", [id,branchId,String(data.catalogId||id).slice(0,100),data.kind||"other",String(data.name||"").slice(0,180),String(data.unit||"шт").slice(0,30),Number(data.stock)||0,Number(data.par)||0,data.cat||null,actor.id]);await enqueueOneC("inventory.changed","inventory",id,{id,branchId,catalogId:row.catalog_id,kind:row.kind,name:row.name,unit:row.unit,stock:Number(row.stock),par:Number(row.par),updatedAt:Date.now()});}
+      else if (name === "publications") {
+        const before=await one("select * from chay_publications where id=$1",[id]);
+        if(before&&actor.role==="master"&&before.author_id!==actor.id)throw Object.assign(new Error("Мастер может редактировать только свои материалы"),{status:403});
+        const allowedStatus=new Set(["draft","review","published","archived"]),allowedKind=new Set(["news","story","tea","event"]),allowedAudience=new Set(["public","team"]);
+        let status=allowedStatus.has(data.status)?data.status:"draft";
+        if(actor.role==="master"&&["published","archived"].includes(status))status="review";
+        const title=String(data.title||"").trim(),body=String(data.body||"").trim();
+        if(title.length<3||body.length<20)throw Object.assign(new Error("Заполните заголовок и текст публикации"),{status:400});
+        const slug=String(data.slug||"").trim().toLowerCase();
+        if(!/^[a-z0-9][a-z0-9-]{2,90}$/.test(slug))throw Object.assign(new Error("Некорректный адрес публикации"),{status:400});
+        const rawCover=String(data.coverUrl||"").trim(),coverUrl=/^(https:\/\/|assets\/|img\/|БРЕНБУК\/assets\/)/.test(rawCover)?rawCover.slice(0,1000):"";
+        const publishedAt=status==="published"?(before?.published_at||new Date(Number(data.publishedAt)||Date.now())):before?.published_at||null;
+        row=await one("insert into chay_publications(id,branch_id,author_id,author_name,title,slug,excerpt,body,cover_url,kind,audience,status,featured,published_at,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,to_timestamp($15/1000.0)) on conflict(id) do update set title=excluded.title,slug=excluded.slug,excerpt=excluded.excerpt,body=excluded.body,cover_url=excluded.cover_url,kind=excluded.kind,audience=excluded.audience,status=excluded.status,featured=excluded.featured,published_at=excluded.published_at,updated_at=now() returning *",[id,branchId,before?.author_id||actor.id,before?.author_name||actor.name,title.slice(0,180),slug,String(data.excerpt||"").slice(0,500),body.slice(0,20000),coverUrl,allowedKind.has(data.kind)?data.kind:"news",allowedAudience.has(data.audience)?data.audience:"public",status,actor.role==="master"?false:Boolean(data.featured),publishedAt,Number(data.createdAt)||Date.now()]);
+      }
       else if (name === "orders") {
         const before=await one("select status,loyalty_credited_at from chay_orders where id=$1",[id]);
         row = await one("insert into chay_orders(id,user_id,branch_id,user_name,master_id,channel,status,items,total,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,to_timestamp($10/1000.0)) on conflict(id) do update set master_id=excluded.master_id,status=excluded.status,items=excluded.items,total=excluded.total,updated_at=now() returning *", [id,data.userId||actor.id,branchId,String(data.userName||actor.name).slice(0,120),data.masterId||null,data.channel||"self",data.status||"new",JSON.stringify(data.items||[]),Number(data.total)||0,Number(data.ts||data.createdAt)||Date.now()]);
@@ -130,19 +182,21 @@ function createRepository(connectionString) {
     },
 
     async remove(name, id, actor) {
-      const table = { messages:"chay_messages",staff_requests:"chay_staff_requests",shift_reports:"chay_shift_reports",certificates:"chay_certificates",inventory:"chay_inventory",orders:"chay_orders",shifts:"chay_shifts" }[name];
+      const table = { messages:"chay_messages",staff_requests:"chay_staff_requests",shift_reports:"chay_shift_reports",certificates:"chay_certificates",inventory:"chay_inventory",orders:"chay_orders",shifts:"chay_shifts",publications:"chay_publications" }[name];
       if (!table) throw Object.assign(new Error("Unknown collection"), { status: 404 });
       const before = await one(`select * from ${table} where id=$1`, [id]);
       if(before?.branch_id&&actor.role!=="owner"&&before.branch_id!==(actor.branch_id||actor.branchId||"sochi"))throw Object.assign(new Error("Запись относится к другому городу"),{status:403});
+      if(name==="publications"&&(before?.status!=="draft"||actor.role==="master"&&before.author_id!==actor.id))throw Object.assign(new Error("Удалить можно только собственный черновик"),{status:409});
       await q(`delete from ${table} where id=$1`, [id]);
       await audit(actor.id, "delete", name, id, before, null);
     }
   };
 
   return {
-    pool, q, one, user, branch, audit, records, loyalty, adjustLoyalty, enqueueOneC, oneCQueueStatus, nextOneCItems, finishOneCItem,
+    pool, q, one, user, branch, publication, audit, records, loyalty, adjustLoyalty, applyInventoryMovement, enqueueOneC, oneCQueueStatus, nextOneCItems, finishOneCItem,
     async health() { return one("select now() as now"); },
     async listBranches() { return (await q("select * from chay_branches where active=true order by position,id")).rows.map(branch); },
+    async publicPublications(branchId) { const id=branchId?(await requireBranch(branchId)).id:null;return (await q("select * from chay_publications where status='published' and audience='public' and ($1::text is null or branch_id=$1) order by featured desc,published_at desc,created_at desc limit 100",[id])).rows.map(publication); },
     async branchById(id) { return branch(await requireBranch(id)); },
     async branchSummaries(actor) {
       const allowed=actor.role==="owner"?null:(actor.branch_id||actor.branchId||"sochi");

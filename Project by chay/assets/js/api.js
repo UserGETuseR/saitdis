@@ -7,7 +7,7 @@ window.ApiClient = (function () {
   let state = "local";
   const listeners = [];
   const pending = new Map();
-  const STAFF_COLLECTIONS = ["messages", "staff_requests", "shift_reports", "service_guides", "inventory", "orders", "shifts", "certificates"];
+  const STAFF_COLLECTIONS = ["messages", "staff_requests", "shift_reports", "service_guides", "inventory", "inventory_movements", "publications", "orders", "shifts", "certificates"];
   const CLIENT_COLLECTIONS = ["orders", "certificates", "messages"];
 
   function emit(extra) { listeners.forEach((fn) => { try { fn({ state, ready, ...extra }); } catch (_) {} }); }
@@ -63,6 +63,19 @@ window.ApiClient = (function () {
     adjust: (userId, delta, note) => request(api(`/loyalty/${encodeURIComponent(userId)}/adjust`), { method:"POST", body:{ delta, note } }),
   };
   const integrations = { oneCStatus:(probe=false)=>request(api(`/integrations/1c/status${probe?"?probe=1":""}`)) };
+  const publications = { publicList:(branchId="")=>request(api(`/public/publications${branchId?`?branch=${encodeURIComponent(branchId)}`:""}`)).then((result)=>result.items||[]) };
+  const inventory = {
+    async move(data) {
+      const result = await request(api("/inventory/movements"), { method:"POST", body:data });
+      hydrating = true;
+      try {
+        if (result.inventory) DB.collection("inventory").upsert(result.inventory);
+        if (result.movement) DB.collection("inventory_movements").upsert(result.movement);
+      } finally { hydrating = false; }
+      setState("cloud", { synced:"inventory_movements" });
+      return result;
+    },
+  };
 
   async function list(name) { return (await request(api(`/records/${name}`))).items || []; }
   function pushRecord(name, record) {
@@ -107,7 +120,7 @@ window.ApiClient = (function () {
   }
 
   return {
-    init, auth, loyalty, integrations, hydrate, list, pushRecord, removeRecord,
+    init, auth, loyalty, integrations, publications, inventory, hydrate, list, pushRecord, removeRecord,
     isReady: () => ready,
     isHydrating: () => hydrating,
     status: () => state,
