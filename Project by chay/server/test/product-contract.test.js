@@ -110,6 +110,16 @@ test("every menu action refreshes the visible cart lifecycle",()=>{
   assert.match(commerce,/Store\.logPick\([^)]*\);App\.refreshCart\?\.\(\)/);
 });
 
+test("public brand assets use stable ASCII URLs",()=>{
+  const runtime=["index.html","sw.js","assets/css/brand-2026.css","assets/css/director-2026.css","assets/js/content.js","assets/js/ui.js","assets/js/views.js","assets/js/views.next.js","assets/js/views.content.js","assets/js/views.director.js","assets/js/commerce.js"];
+  const text=runtime.map((file)=>fs.readFileSync(path.join(root,file),"utf8")).join("\n");
+  assert.doesNotMatch(text,/БРЕНБУК\/assets\//);
+  for(const name of ["logo-color.png","logo-cream-on-dark.png","logo-mark-color.png","mark-bowl-cream.svg","mark-bowl-terra.svg","mark-color.png","pattern-real-muted.png","pattern-real.png"]){
+    assert.ok(fs.statSync(path.join(root,"img/brand",name)).size>0,name);
+  }
+  assert.match(text,/cha-cache-v31-ascii-brand/);
+});
+
 test("phone loyalty and order notifications survive a restart",()=>{
   const schema=fs.readFileSync(path.join(root,"server/sql/001_production.sql"),"utf8");
   const repository=fs.readFileSync(path.join(root,"server/src/repository.js"),"utf8");

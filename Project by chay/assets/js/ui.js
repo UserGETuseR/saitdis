@@ -246,7 +246,7 @@ window.UI = (function () {
 
   // Маскот «Дед ЧИ» с пиалой (SVG), suffix — уникальный для градиентов
   function dedMark(suffix, className) {
-    return `<img class="ded-mark ${className || ""}" src="БРЕНБУК/assets/logo-mark-color.png" alt="Чайный дед" loading="lazy">`;
+    return `<img class="ded-mark ${className || ""}" src="img/brand/logo-mark-color.png" alt="Чайный дед" loading="lazy">`;
     /* Резерв старого шаблона ниже сохраняется для совместимости сохранённых
        экранов, но все новые поверхности используют фирменный знак из брендбука. */
     const f = "df" + suffix, b = "db" + suffix;

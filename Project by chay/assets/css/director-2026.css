@@ -2,7 +2,7 @@
 :root{--director-width:1320px;--director-radius:28px;--director-shadow:0 28px 80px rgba(61,38,22,.10)}
 html,body{max-width:100%;overflow-x:clip}#app a,.topbar a,.foot a,.cart a{color:inherit}.eff-chip{--c:var(--terra)!important}.director-hero,.preorder-hero,.mood-quiz,.mushroom-hero,.my-tea-hero{background:var(--paper);color:var(--ink)}
 .director-hero,.preorder-hero,.mushroom-hero,.my-tea-hero{position:relative;overflow:hidden;border-bottom:1px solid var(--ink)}
-.director-hero::before,.preorder-hero::before,.mood-quiz::before,.mushroom-hero::before,.my-tea-hero::before{content:"";position:absolute;inset:0;background:url("../../БРЕНБУК/assets/pattern-real-muted.png") center/760px auto;opacity:.17;pointer-events:none}
+.director-hero::before,.preorder-hero::before,.mood-quiz::before,.mushroom-hero::before,.my-tea-hero::before{content:"";position:absolute;inset:0;background:url("../../img/brand/pattern-real-muted.png") center/760px auto;opacity:.17;pointer-events:none}
 .director-hero-copy,.director-ded-stage,.preorder-hero>*,.mood-quiz>*,.mushroom-hero>*,.my-tea-hero>*{position:relative;z-index:1}
 
 /* Первый экран */

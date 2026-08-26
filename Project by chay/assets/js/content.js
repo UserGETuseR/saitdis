@@ -5,10 +5,10 @@ window.Content = (function () {
   const KIND = { news:"Новости",story:"Истории",tea:"Чайная карта",event:"Афиша" };
   const STATUS = { draft:"Черновик",review:"На проверке",published:"Опубликовано",archived:"В архиве" };
   const PRESET = {
-    hand:"БРЕНБУК/assets/mark-color.png",
-    sage:"БРЕНБУК/assets/logo-mark-color.png",
-    elder:"БРЕНБУК/assets/logo-color.png",
-    pattern:"БРЕНБУК/assets/pattern-real.png",
+    hand:"img/brand/mark-color.png",
+    sage:"img/brand/logo-mark-color.png",
+    elder:"img/brand/logo-color.png",
+    pattern:"img/brand/pattern-real.png",
   };
   const translit = {а:"a",б:"b",в:"v",г:"g",д:"d",е:"e",ё:"e",ж:"zh",з:"z",и:"i",й:"y",к:"k",л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",х:"h",ц:"c",ч:"ch",ш:"sh",щ:"sch",ъ:"",ы:"y",ь:"",э:"e",ю:"yu",я:"ya"};
 
