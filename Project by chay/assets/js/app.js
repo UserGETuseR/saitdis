@@ -48,7 +48,9 @@ window.App = (function () {
     const targets = root.querySelectorAll([
       ".story-ribbon > *", ".story-metrics > *", ".city-book-head", ".city-chapter",
       ".ritual-copy", ".ritual-path article", ".matcha-heading", ".matcha-visual", ".matcha-card", ".story-bridge > div",
-      ".gift-call > *", ".grid > *", ".dash-grid > *",
+      ".gift-call > *", ".grid > *", ".dash-grid > *", ".choice-stage article",
+      ".director-featured article", ".cold-editorial > *", ".tea-shelf", ".director-drink",
+      ".director-matcha", ".director-mushroom", ".director-dessert", ".director-merch",
       ".guide-grid > *", ".network-card", ".work-form", ".work-list", ".journal-card", ".editorial-command", ".publication-row"
     ].join(","));
     targets.forEach((node) => node.classList.add("motion-item"));
@@ -126,10 +128,10 @@ window.App = (function () {
     const u = Auth.current();
     const L = {
       home: { route: "/", icon: "bi-house-door", label: "Главная" },
-      alch: { route: "/alchemist", icon: "bi-moon-stars", label: "Подбор" },
+      alch: { route: "/alchemist", icon: "bi-moon-stars", label: "По настроению" },
       elx: { route: "/elixirs", icon: "bi-droplet-half", label: "Эликсиры" },
       menu: { route: "/menu", icon: "bi-cup-hot", label: "Меню" },
-      preorder: { route: "/preorder", icon: "bi-bag-check", label: "Предзаказ" },
+      preorder: { route: "/menu", icon: "bi-cup-hot", label: "Меню" },
       events: { route: "/events", icon: "bi-calendar-event", label: "Афиша" },
       journal: { route: "/journal", icon: "bi-journal-text", label: "Журнал" },
       mush: { route: "/mushrooms", icon: "bi-flower1", label: "Грибы" },
@@ -138,7 +140,7 @@ window.App = (function () {
       cert: { route: "/certificate", icon: "bi-gift", label: "Сертификат" },
       messages: { route: "/messages", icon: "bi-chat-heart", label: "Связь" },
       team: { route: "/team", icon: "bi-chat-square-heart", label: "Команда" },
-      pass: { route: "/passport", icon: "bi-patch-check", label: "Паспорт" },
+      pass: { route: "/passport", icon: "bi-bookmark-heart", label: "Мой чай" },
       client: { route: "/client", icon: "bi-grid", label: "Кабинет" },
       master: { route: "/master", icon: "bi-grid", label: "Кабинет" },
       admin: { route: "/admin", icon: "bi-speedometer2", label: "Управление" },
@@ -208,6 +210,11 @@ window.App = (function () {
       b.textContent = n;
       b.classList.toggle("hidden", n === 0);
     });
+  }
+
+  function refreshCart() {
+    updateCartBadge();
+    renderCart();
   }
 
   function addElixir(teaId, mushroomId) {
@@ -298,6 +305,7 @@ window.App = (function () {
   }
 
   function renderCart() {
+    updateCartBadge();
     const s = window.Store.get();
     const body = document.getElementById("cartBody");
     if (!body) return;
@@ -385,13 +393,13 @@ window.App = (function () {
         Commerce.openCheckout();
         return;
       }
-      UI.toast("Форма предзаказа временно недоступна");
+      UI.toast("Оформление заказа временно недоступно");
     });
 
     render();
   }
 
-  return { init, render, renderCart, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, closeCart, afterAuth, logout };
+  return { init, render, renderCart, refreshCart, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, closeCart, afterAuth, logout };
 })();
 
 document.addEventListener("DOMContentLoaded", App.init);

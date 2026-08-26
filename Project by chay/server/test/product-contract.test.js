@@ -72,18 +72,42 @@ test("city choice is wired into registration, staff console and 1C payloads",()=
   assert.match(text,/order\.changed[\s\S]{0,300}branchId/);
 });
 
-test("director preorder connects recommendations, arbitrary grams, delivery and merch",()=>{
+test("director menu connects recommendations, arbitrary grams, delivery and merch",()=>{
   const files=["assets/js/data.commerce.js","assets/js/commerce.js","assets/js/views.director.js","assets/js/store.js","assets/js/orders.js"];
   const text=files.map((file)=>fs.readFileSync(path.join(root,file),"utf8")).join("\n");
   assert.match(text,/TEA_ADDONS/);
   assert.match(text,/DESSERTS/);
   assert.match(text,/MERCH/);
-  assert.match(text,/Анкета настроения/);
+  assert.match(text,/Чай по настроению/);
   assert.match(text,/addConfigured/);
   assert.match(text,/fulfillment/);
   assert.match(text,/scheduledAt/);
   assert.match(text,/grams\.step="1"/);
   assert.match(text,/Чай пей и добрей/);
+});
+
+test("public menu has one clear path and a complete mushroom chapter",()=>{
+  const views=fs.readFileSync(path.join(root,"assets/js/views.director.js"),"utf8");
+  const app=fs.readFileSync(path.join(root,"assets/js/app.js"),"utf8");
+  const html=fs.readFileSync(path.join(root,"index.html"),"utf8");
+  const sw=fs.readFileSync(path.join(root,"sw.js"),"utf8");
+  assert.match(app,/label: "Меню"/);
+  assert.match(app,/label: "Мой чай"/);
+  assert.match(views,/id="chapter-matcha"/);
+  assert.match(views,/id="chapter-mushrooms"/);
+  assert.match(views,/Ясность без спешки/);
+  assert.match(views,/Только осознанный ритуал/);
+  assert.doesNotMatch(html,/>Оформить предзаказ</);
+  assert.match(sw,/cold-lineup-v2\.png/);
+});
+
+test("every menu action refreshes the visible cart lifecycle",()=>{
+  const app=fs.readFileSync(path.join(root,"assets/js/app.js"),"utf8");
+  const commerce=fs.readFileSync(path.join(root,"assets/js/commerce.js"),"utf8");
+  assert.match(app,/function refreshCart\(\)[\s\S]{0,120}updateCartBadge\(\)[\s\S]{0,120}renderCart\(\)/);
+  assert.match(app,/return \{[^}]*refreshCart/);
+  assert.match(commerce,/function addProduct\([^)]*\)[\s\S]{0,900}App\.refreshCart\?\.\(\)/);
+  assert.match(commerce,/Store\.logPick\([^)]*\);App\.refreshCart\?\.\(\)/);
 });
 
 test("phone loyalty and order notifications survive a restart",()=>{

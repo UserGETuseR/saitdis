@@ -55,7 +55,7 @@ Views.home = function () {
     <section class="wrap final-cta">
       <div class="seal-mark" aria-hidden="true">茶道</div>
       <h2 class="h2c">${Auth.current() ? "Продолжи свой путь" : "Стань частью историй"}</h2>
-      <p class="muted center">${Auth.current() ? "Твой чайный паспорт и практики ждут." : "Заведи аккаунт — храни паспорт, практики и духовный путь."}</p>
+      <p class="muted center">${Auth.current() ? "Любимые сорта и практики ждут в разделе «Мой чай»." : "Создай аккаунт — сохраняй любимые сорта, практики и историю вкуса."}</p>
       <div class="center" style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
         <button class="btn primary" data-go="#/alchemist"><i class="bi bi-stars"></i> Начать ритуал</button>
         ${Auth.current()
@@ -154,7 +154,7 @@ Views.alchemist = (function () {
   function stepHTML() {
     const q = QUESTIONS[step];
     return `
-      <div class="section-tag center">Подбор Чайного мастера</div>
+      <div class="section-tag center">Чай по настроению</div>
       <div class="progress">${QUESTIONS.map((_, i) => `<i class="${i <= step ? "on" : ""}"></i>`).join("")}</div>
       <div class="step-title">${q.title}</div>
       <p class="step-sub">${q.sub}</p>
@@ -601,7 +601,7 @@ Views.auth = function () {
       <div class="kanji-bg" aria-hidden="true">門</div>
       <div class="brand-mark">Вход в пространство</div>
       <h1 id="authTitle">С возвращением</h1>
-      <p class="lead">Войди, чтобы хранить свой чайный паспорт, практики и духовный путь.</p>
+      <p class="lead">Войди, чтобы сохранять любимые сорта, практики и историю в разделе «Мой чай».</p>
     </header>
     <section class="wrap narrow">
       <div class="auth-card">
@@ -638,7 +638,7 @@ Views.auth = function () {
           <div class="field reg-only hidden">
             <label><i class="bi bi-phone"></i> Телефон карты лояльности</label>
             <input type="tel" name="phone" autocomplete="tel" inputmode="tel" placeholder="+7 900 000-00-00" />
-            <small class="field-hint">По этому номеру команда найдёт вашу карту и предзаказы.</small>
+            <small class="field-hint">По этому номеру команда найдёт вашу карту и заказы.</small>
           </div>
           <div class="field reg-only hidden">
             <label><i class="bi bi-bookmark"></i> Ваша чайная глава</label>
@@ -1102,8 +1102,8 @@ Views.client = function () {
       </section>
 
       <section class="client-notifications">
-        <div class="client-section-head"><div><span class="section-tag">Живая связь</span><h2>Команда держит<br>вас в курсе.</h2></div><button class="btn ghost" data-go="#/preorder">Новый предзаказ</button></div>
-        <div class="notification-list">${myNotifications.map((notice)=>`<article class="${notice.status==="read"?"is-read":"is-new"}"><span>${notice.kind||"чайная история"}</span><h3>${notice.title}</h3><p>${notice.body||""}</p><small>${new Date(notice.createdAt).toLocaleString("ru-RU")}</small>${notice.status!=="read"?`<button data-notice-read="${notice.id}">Прочитано</button>`:""}</article>`).join("")||`<article class="notification-empty"><span>всё спокойно</span><h3>Новые сообщения появятся здесь.</h3><p>После предзаказа вы увидите подтверждение и изменение статуса.</p></article>`}</div>
+        <div class="client-section-head"><div><span class="section-tag">Живая связь</span><h2>Команда держит<br>вас в курсе.</h2></div><button class="btn ghost" data-go="#/menu">Открыть меню</button></div>
+        <div class="notification-list">${myNotifications.map((notice)=>`<article class="${notice.status==="read"?"is-read":"is-new"}"><span>${notice.kind||"чайная история"}</span><h3>${notice.title}</h3><p>${notice.body||""}</p><small>${new Date(notice.createdAt).toLocaleString("ru-RU")}</small>${notice.status!=="read"?`<button data-notice-read="${notice.id}">Прочитано</button>`:""}</article>`).join("")||`<article class="notification-empty"><span>всё спокойно</span><h3>Новые сообщения появятся здесь.</h3><p>После заказа вы увидите подтверждение и изменение статуса.</p></article>`}</div>
       </section>
 
       <div class="dash-grid">
@@ -1375,7 +1375,7 @@ Views.profile = function () {
   const roleLabel = isAdmin ? (p.title || "Управляющий чайной") : isMaster ? (p.title || "Чайный мастер") : "Гость чайной";
   const roleIcon = isAdmin ? "bi-speedometer2" : isMaster ? "bi-yin-yang" : "bi-person-badge";
 
-  const PALETTE = ["#c4452f", "#e8783e", "#c9a04e", "#7e9b6f", "#2c6e7e", "#8a7b9c", "#b5654a", "#6e4a2f"];
+  const PALETTE = ["#b85c2c", "#c87443", "#c9a04e", "#5a7560", "#73523a", "#8b674f", "#a86b47", "#6e4a2f"];
 
   const html = `
     <header class="hero short">
@@ -1402,7 +1402,7 @@ Views.profile = function () {
           <div class="field"><label><i class="bi bi-person"></i> Имя</label><input name="name" value="${u.name}" /></div>
           <div class="field"><label><i class="bi bi-at"></i> Логин</label><input name="login" value="${u.login || ""}" /><small class="field-hint">Латиница, цифры и . _ - · 3–20 символов</small></div>
           <div class="field"><label><i class="bi bi-envelope"></i> E-mail <span class="muted">(необязательно)</span></label><input name="email" value="${u.email || ""}" placeholder="для восстановления" /></div>
-          <div class="field"><label><i class="bi bi-phone"></i> Телефон карты лояльности</label><input name="phone" type="tel" inputmode="tel" autocomplete="tel" value="${u.phone || ""}" placeholder="+7 900 000-00-00" /><small class="field-hint">По номеру команда находит карту, предзаказы и награды.</small></div>
+          <div class="field"><label><i class="bi bi-phone"></i> Телефон карты лояльности</label><input name="phone" type="tel" inputmode="tel" autocomplete="tel" value="${u.phone || ""}" placeholder="+7 900 000-00-00" /><small class="field-hint">По номеру команда находит карту, заказы и награды.</small></div>
           <div class="field"><label><i class="bi bi-bookmark"></i> ${u.role==="client"?"Моя чайная глава":"Рабочий город"}</label>${u.role==="client"?`<select name="branchId">${Branches.all().map((branch)=>`<option value="${branch.id}" ${branch.id===(u.branchId||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select><small class="field-hint">Лояльность общая для сети. Заказы и сообщения получает команда этого города.</small>`:`<div class="profile-branch-readonly"><b>${Branches.byId(u.branchId||"sochi").city}</b><span>Рабочую главу назначает директор сети</span></div>`}</div>
           <div class="field">
             <label><i class="bi bi-palette"></i> Цвет аватара</label>

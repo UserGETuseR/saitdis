@@ -6,7 +6,7 @@
 //   • Внешние (шрифты Google, иконки CDN) — cache-first (офлайн после первого визита).
 // При смене версии меняй CACHE — старые кеши очищаются на activate.
 
-const CACHE = "cha-cache-v28-director";
+const CACHE = "cha-cache-v30-menu-flow";
 
 const CORE = [
   "./",
@@ -17,7 +17,7 @@ const CORE = [
   "./assets/css/styles.css?v=12",
   "./assets/css/revamp-2026.css?v=20260822.1",
   "./assets/css/brand-2026.css?v=20260823.20",
-  "./assets/css/director-2026.css?v=20260826.1",
+  "./assets/css/director-2026.css?v=20260827.3",
   "./БРЕНБУК/assets/logo-color.png",
   "./БРЕНБУК/assets/logo-cream-on-dark.png",
   "./БРЕНБУК/assets/logo-mark-color.png",
@@ -50,10 +50,11 @@ const CORE = [
   "./assets/js/views.js?v=20260823.3",
   "./assets/js/views.next.js?v=20260823.5",
   "./assets/js/views.content.js?v=20260823.1",
-  "./assets/js/views.director.js?v=20260826.1",
-  "./assets/js/commerce.js?v=20260826.1",
-  "./assets/js/app.js?v=20260826.1",
+  "./assets/js/views.director.js?v=20260827.1",
+  "./assets/js/commerce.js?v=20260827.1",
+  "./assets/js/app.js?v=20260827.1",
   "./img/matcha-lineup-v1.png",
+  "./img/cold-lineup-v2.png",
 ];
 
 self.addEventListener("install", (e) => {

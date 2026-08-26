@@ -7,7 +7,7 @@ window.Auth = (function () {
   const DB_KEY = "tea_stories_db_v1";
   const SESSION_KEY = "tea_stories_session_v1";
 
-  const PALETTE = ["#c4452f", "#c9a04e", "#7e9b6f", "#8a7b9c", "#2c6e7e", "#b5654a"];
+  const PALETTE = ["#b85c2c", "#c9a04e", "#5a7560", "#8b674f", "#73523a", "#a86b47"];
 
   function load() {
     try { return JSON.parse(localStorage.getItem(DB_KEY)) || { users: [] }; }
