@@ -7,8 +7,8 @@ window.ApiClient = (function () {
   let state = "local";
   const listeners = [];
   const pending = new Map();
-  const STAFF_COLLECTIONS = ["messages", "staff_requests", "shift_reports", "service_guides", "inventory", "inventory_movements", "publications", "orders", "shifts", "certificates"];
-  const CLIENT_COLLECTIONS = ["orders", "certificates", "messages"];
+  const STAFF_COLLECTIONS = ["messages", "staff_requests", "shift_reports", "service_guides", "inventory", "inventory_movements", "publications", "orders", "shifts", "certificates", "notifications"];
+  const CLIENT_COLLECTIONS = ["orders", "certificates", "messages", "notifications"];
 
   function emit(extra) { listeners.forEach((fn) => { try { fn({ state, ready, ...extra }); } catch (_) {} }); }
   function setState(next, extra) { state = next; emit(extra); }
@@ -47,7 +47,7 @@ window.ApiClient = (function () {
   const auth = {
     me: () => request(api("/auth/me")),
     login: (login, password) => request(api("/auth/login"), { method:"POST", body:{ login, password } }),
-    register: (data) => request(api("/auth/register"), { method:"POST", body:{ name:data.name, login:data.login, email:data.email, branchId:data.branchId, password:data.pass, password2:data.pass2 } }),
+    register: (data) => request(api("/auth/register"), { method:"POST", body:{ name:data.name, login:data.login, email:data.email, phone:data.phone, branchId:data.branchId, password:data.pass, password2:data.pass2 } }),
     logout: () => request(api("/auth/logout"), { method:"POST", body:{} }),
     update: (data) => request(api("/auth/me"), { method:"PATCH", body:data }),
     password: (currentPassword, newPassword) => request(api("/auth/password"), { method:"PATCH", body:{ currentPassword, newPassword } }),
@@ -60,8 +60,10 @@ window.ApiClient = (function () {
   };
   const loyalty = {
     me: () => request(api("/loyalty")),
+    search: (phone) => request(api(`/loyalty/search?phone=${encodeURIComponent(phone)}`)),
     adjust: (userId, delta, note) => request(api(`/loyalty/${encodeURIComponent(userId)}/adjust`), { method:"POST", body:{ delta, note } }),
   };
+  const notifications = { read:(id)=>request(api(`/notifications/${encodeURIComponent(id)}/read`),{method:"PATCH",body:{}}) };
   const integrations = { oneCStatus:(probe=false)=>request(api(`/integrations/1c/status${probe?"?probe=1":""}`)) };
   const publications = { publicList:(branchId="")=>request(api(`/public/publications${branchId?`?branch=${encodeURIComponent(branchId)}`:""}`)).then((result)=>result.items||[]) };
   const inventory = {
@@ -83,7 +85,8 @@ window.ApiClient = (function () {
     const key = `${name}:${record.id}`;
     const previous = pending.get(key) || Promise.resolve();
     const task = previous.catch(() => false).then(async () => { try {
-      if (name === "certificates" && !window.Auth?.isStaff?.()) await request(api("/public/certificates"), { method:"POST", body:{...record,branchId:record.branchId||window.Branches?.current?.().id||"sochi"} });
+      if (name === "notifications") await notifications.read(record.id);
+      else if (name === "certificates" && !window.Auth?.isStaff?.()) await request(api("/public/certificates"), { method:"POST", body:{...record,branchId:record.branchId||window.Branches?.current?.().id||"sochi"} });
       else if (name === "orders" && !window.Auth?.isStaff?.()) await request(api("/public/orders"), { method:"POST", body:{ ...record, branchId:record.branchId||window.Branches?.current?.().id||"sochi", createdAt:record.ts || record.createdAt } });
       else await request(api(`/records/${name}`), { method:"PUT", body:record });
       setState("cloud", { synced:name }); return true;
@@ -120,7 +123,7 @@ window.ApiClient = (function () {
   }
 
   return {
-    init, auth, loyalty, integrations, publications, inventory, hydrate, list, pushRecord, removeRecord,
+    init, auth, loyalty, notifications, integrations, publications, inventory, hydrate, list, pushRecord, removeRecord,
     isReady: () => ready,
     isHydrating: () => hydrating,
     status: () => state,

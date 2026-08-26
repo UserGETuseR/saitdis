@@ -71,3 +71,32 @@ test("city choice is wired into registration, staff console and 1C payloads",()=
   assert.match(text,/inventory\.changed[\s\S]{0,300}branchId/);
   assert.match(text,/order\.changed[\s\S]{0,300}branchId/);
 });
+
+test("director preorder connects recommendations, arbitrary grams, delivery and merch",()=>{
+  const files=["assets/js/data.commerce.js","assets/js/commerce.js","assets/js/views.director.js","assets/js/store.js","assets/js/orders.js"];
+  const text=files.map((file)=>fs.readFileSync(path.join(root,file),"utf8")).join("\n");
+  assert.match(text,/TEA_ADDONS/);
+  assert.match(text,/DESSERTS/);
+  assert.match(text,/MERCH/);
+  assert.match(text,/Анкета настроения/);
+  assert.match(text,/addConfigured/);
+  assert.match(text,/fulfillment/);
+  assert.match(text,/scheduledAt/);
+  assert.match(text,/grams\.step="1"/);
+  assert.match(text,/Чай пей и добрей/);
+});
+
+test("phone loyalty and order notifications survive a restart",()=>{
+  const schema=fs.readFileSync(path.join(root,"server/sql/001_production.sql"),"utf8");
+  const repository=fs.readFileSync(path.join(root,"server/src/repository.js"),"utf8");
+  const api=fs.readFileSync(path.join(root,"server/src/production-server.js"),"utf8");
+  assert.match(schema,/chay_users[\s\S]{0,500}phone text not null default ''/i);
+  assert.match(schema,/create table if not exists chay_notifications/i);
+  assert.match(schema,/fulfillment text not null default 'pickup'/i);
+  assert.match(schema,/scheduled_at timestamptz/i);
+  assert.match(repository,/userByPhone/);
+  assert.match(repository,/Предзаказ принят/);
+  assert.match(repository,/order\.created[\s\S]{0,500}fulfillment/);
+  assert.match(api,/\/api\/loyalty\/search/);
+  assert.match(api,/notificationMatch=path\.match/);
+});

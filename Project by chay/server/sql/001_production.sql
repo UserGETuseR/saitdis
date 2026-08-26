@@ -27,6 +27,7 @@ create table if not exists chay_users (
   login citext not null unique,
   name text not null,
   email citext,
+  phone text not null default '',
   role text not null default 'client' check (role in ('client','master','admin','owner')),
   branch_id text references chay_branches(id),
   password_salt text not null,
@@ -37,6 +38,8 @@ create table if not exists chay_users (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table chay_users add column if not exists phone text not null default '';
+create unique index if not exists chay_users_phone_unique on chay_users(phone) where phone<>'';
 alter table chay_users add column if not exists branch_id text references chay_branches(id);
 update chay_users set branch_id='sochi' where branch_id is null and role<>'owner';
 update chay_users set branch_id=null where role='owner';
@@ -230,11 +233,23 @@ create table if not exists chay_orders (
   status text not null default 'new' check (status in ('new','brewing','done','cancelled')),
   items jsonb not null default '[]'::jsonb,
   total numeric(12,2) not null default 0,
+  fulfillment text not null default 'pickup' check (fulfillment in ('pickup','delivery')),
+  contact_phone text not null default '',
+  delivery_address text not null default '',
+  scheduled_at timestamptz,
+  notification_channel text not null default 'in_app' check (notification_channel in ('in_app','call','telegram')),
+  customer_note text not null default '',
   loyalty_credited_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 alter table chay_orders add column if not exists loyalty_credited_at timestamptz;
+alter table chay_orders add column if not exists fulfillment text not null default 'pickup';
+alter table chay_orders add column if not exists contact_phone text not null default '';
+alter table chay_orders add column if not exists delivery_address text not null default '';
+alter table chay_orders add column if not exists scheduled_at timestamptz;
+alter table chay_orders add column if not exists notification_channel text not null default 'in_app';
+alter table chay_orders add column if not exists customer_note text not null default '';
 alter table chay_orders add column if not exists branch_id text references chay_branches(id);
 update chay_orders set branch_id='sochi' where branch_id is null;
 alter table chay_orders alter column branch_id set default 'sochi';
@@ -242,6 +257,24 @@ alter table chay_orders alter column branch_id set not null;
 create index if not exists chay_orders_queue on chay_orders(status, created_at desc);
 create index if not exists chay_orders_user on chay_orders(user_id, created_at desc);
 create index if not exists chay_orders_branch on chay_orders(branch_id,status,created_at desc);
+
+create table if not exists chay_notifications (
+  id text primary key default gen_random_uuid()::text,
+  user_id text references chay_users(id) on delete cascade,
+  branch_id text references chay_branches(id),
+  phone text not null default '',
+  kind text not null default 'order',
+  title text not null,
+  body text not null default '',
+  status text not null default 'new' check (status in ('new','read')),
+  channel text not null default 'in_app' check (channel in ('in_app','call','telegram')),
+  entity_type text,
+  entity_id text,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists chay_notifications_user on chay_notifications(user_id,status,created_at desc);
+create index if not exists chay_notifications_branch on chay_notifications(branch_id,status,created_at desc);
 
 create table if not exists chay_loyalty_accounts (
   user_id text primary key references chay_users(id) on delete cascade,

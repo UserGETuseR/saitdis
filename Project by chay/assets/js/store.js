@@ -102,6 +102,30 @@ window.Store = (function () {
       state.cart.push({ teaId: null, mushroomId: null, price, name, sub: sub || null });
       save();
     },
+    addConfigured(item) {
+      const row = Object.assign({
+        teaId: null,
+        mushroomId: null,
+        kind: "product",
+        sku: null,
+        name: "Позиция",
+        sub: null,
+        grams: null,
+        quantity: 1,
+        unit: "шт",
+        addons: [],
+        price: 0,
+      }, item || {});
+      row.price = Math.max(0, Number(row.price) || 0);
+      row.quantity = Math.max(1, Number(row.quantity) || 1);
+      row.grams = row.grams ? Math.max(1, Number(row.grams) || 0) : null;
+      row.addons = Array.isArray(row.addons) ? row.addons.slice(0, 12) : [];
+      state.cart.push(row);
+      if (row.teaId) this.discoverTea(row.teaId);
+      if (row.mushroomId) this.discoverMushroom(row.mushroomId);
+      save();
+      return row;
+    },
     removeFromCart(index) {
       state.cart.splice(index, 1);
       save();

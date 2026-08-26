@@ -636,6 +636,11 @@ Views.auth = function () {
             <input type="email" name="email" autocomplete="email" placeholder="для восстановления, по желанию" />
           </div>
           <div class="field reg-only hidden">
+            <label><i class="bi bi-phone"></i> Телефон карты лояльности</label>
+            <input type="tel" name="phone" autocomplete="tel" inputmode="tel" placeholder="+7 900 000-00-00" />
+            <small class="field-hint">По этому номеру команда найдёт вашу карту и предзаказы.</small>
+          </div>
+          <div class="field reg-only hidden">
             <label><i class="bi bi-bookmark"></i> Ваша чайная глава</label>
             <select name="branchId">${(window.Branches?.all?.()||[]).map((branch)=>`<option value="${branch.id}" ${branch.id===(window.Branches?.current?.().id||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select>
             <small class="field-hint">Сообщения и заказы увидит команда выбранного города. Лояльность действует во всей сети.</small>
@@ -697,7 +702,7 @@ Views.auth = function () {
         const data = Object.fromEntries(new FormData(form).entries());
         const res = await (mode === "login"
           ? Auth.login(data.login, data.pass)
-          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, branchId:data.branchId||"sochi", role: "client" }));
+          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, phone:data.phone, branchId:data.branchId||"sochi", role: "client" }));
         submit.disabled = false;
         if (!res.ok) { showErr(res.error); return; }
         App.afterAuth(res.user);
@@ -1063,6 +1068,7 @@ Views.client = function () {
   const lastPick = s.history[0];
   const lastTea = lastPick ? UI.teaById(lastPick.tea) : null;
   const myOrders = (window.Orders ? Orders.forUser(u.id) : []).slice(0, 5);
+  const myNotifications = (window.Notifications ? Notifications.all() : []).slice(0, 6);
   const myCertificates = (window.Operations ? Operations.visibleCertificates() : []).slice(0, 5);
   const certificateLabels = {new:"Заявка получена",contacted:"Команда связалась",awaiting_payment:"Ожидаем оплату",confirmed:"Оплата подтверждена",issued:"Сертификат выпущен",redeemed:"Использован",cancelled:"Отменён"};
   const certificateSteps = ["new","contacted","awaiting_payment","confirmed","issued","redeemed"];
@@ -1093,6 +1099,11 @@ Views.client = function () {
         <div><span class="section-tag">Карта лояльности</span><h2>Каждая чашка<br>остаётся в истории.</h2><p>${s.stamps % 6 ? `До следующего подарка — ${6 - (s.stamps % 6)}.` : s.stamps ? "Подарок уже ждёт вас. Покажите карту чайному мастеру." : "Первая отметка появится после готового заказа."}</p></div>
         <div class="loyalty-seal"><span>${s.stamps}</span><small>всего отметок</small></div>
         <div class="loyalty-track">${Array.from({length:6},(_,i)=>`<i class="${i<(s.stamps%6)||s.stamps>0&&s.stamps%6===0?"on":""}">${i===5?"茶":i+1}</i>`).join("")}</div>
+      </section>
+
+      <section class="client-notifications">
+        <div class="client-section-head"><div><span class="section-tag">Живая связь</span><h2>Команда держит<br>вас в курсе.</h2></div><button class="btn ghost" data-go="#/preorder">Новый предзаказ</button></div>
+        <div class="notification-list">${myNotifications.map((notice)=>`<article class="${notice.status==="read"?"is-read":"is-new"}"><span>${notice.kind||"чайная история"}</span><h3>${notice.title}</h3><p>${notice.body||""}</p><small>${new Date(notice.createdAt).toLocaleString("ru-RU")}</small>${notice.status!=="read"?`<button data-notice-read="${notice.id}">Прочитано</button>`:""}</article>`).join("")||`<article class="notification-empty"><span>всё спокойно</span><h3>Новые сообщения появятся здесь.</h3><p>После предзаказа вы увидите подтверждение и изменение статуса.</p></article>`}</div>
       </section>
 
       <div class="dash-grid">
@@ -1146,6 +1157,7 @@ Views.client = function () {
     html,
     mount(root) {
       root.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => UI.navigate(b.dataset.go)));
+      root.querySelectorAll("[data-notice-read]").forEach((b)=>b.addEventListener("click",async()=>{await Notifications.markRead(b.dataset.noticeRead);b.closest("article").className="is-read";b.remove();}));
     },
   };
 };
@@ -1390,6 +1402,7 @@ Views.profile = function () {
           <div class="field"><label><i class="bi bi-person"></i> Имя</label><input name="name" value="${u.name}" /></div>
           <div class="field"><label><i class="bi bi-at"></i> Логин</label><input name="login" value="${u.login || ""}" /><small class="field-hint">Латиница, цифры и . _ - · 3–20 символов</small></div>
           <div class="field"><label><i class="bi bi-envelope"></i> E-mail <span class="muted">(необязательно)</span></label><input name="email" value="${u.email || ""}" placeholder="для восстановления" /></div>
+          <div class="field"><label><i class="bi bi-phone"></i> Телефон карты лояльности</label><input name="phone" type="tel" inputmode="tel" autocomplete="tel" value="${u.phone || ""}" placeholder="+7 900 000-00-00" /><small class="field-hint">По номеру команда находит карту, предзаказы и награды.</small></div>
           <div class="field"><label><i class="bi bi-bookmark"></i> ${u.role==="client"?"Моя чайная глава":"Рабочий город"}</label>${u.role==="client"?`<select name="branchId">${Branches.all().map((branch)=>`<option value="${branch.id}" ${branch.id===(u.branchId||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select><small class="field-hint">Лояльность общая для сети. Заказы и сообщения получает команда этого города.</small>`:`<div class="profile-branch-readonly"><b>${Branches.byId(u.branchId||"sochi").city}</b><span>Рабочую главу назначает директор сети</span></div>`}</div>
           <div class="field">
             <label><i class="bi bi-palette"></i> Цвет аватара</label>
@@ -1466,7 +1479,7 @@ Views.profile = function () {
         e.preventDefault();
         hideErr(acctErr);
         const d = Object.fromEntries(new FormData(acctForm).entries());
-        const res = await Auth.updateAccount({ name: d.name, login: d.login, email: d.email, avatarColor: d.avatarColor, ...(u.role==="client"?{branchId:d.branchId}:{}) });
+        const res = await Auth.updateAccount({ name: d.name, login: d.login, email: d.email, phone:d.phone, avatarColor: d.avatarColor, ...(u.role==="client"?{branchId:d.branchId}:{}) });
         if (!res.ok) { showErr(acctErr, res.error); return; }
         if(u.role==="client"&&d.branchId)await Branches.select(d.branchId,{save:false});
         UI.toast("Аккаунт обновлён");

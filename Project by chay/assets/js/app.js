@@ -6,6 +6,7 @@ window.App = (function () {
     "/alchemist": Views.alchemist,
     "/elixirs": Views.elixirs,
     "/menu": Views.menu,
+    "/preorder": Views.preorder,
     "/events": Views.events,
     "/journal": Views.journal,
     "/mushrooms": Views.mushrooms,
@@ -128,6 +129,7 @@ window.App = (function () {
       alch: { route: "/alchemist", icon: "bi-moon-stars", label: "Подбор" },
       elx: { route: "/elixirs", icon: "bi-droplet-half", label: "Эликсиры" },
       menu: { route: "/menu", icon: "bi-cup-hot", label: "Меню" },
+      preorder: { route: "/preorder", icon: "bi-bag-check", label: "Предзаказ" },
       events: { route: "/events", icon: "bi-calendar-event", label: "Афиша" },
       journal: { route: "/journal", icon: "bi-journal-text", label: "Журнал" },
       mush: { route: "/mushrooms", icon: "bi-flower1", label: "Грибы" },
@@ -141,10 +143,10 @@ window.App = (function () {
       master: { route: "/master", icon: "bi-grid", label: "Кабинет" },
       admin: { route: "/admin", icon: "bi-speedometer2", label: "Управление" },
     };
-    if (!u) return { links: [L.home, L.journal, L.brew, L.menu, L.events, L.cert], tab: [L.home, L.brew, L.menu, L.events, L.cert] };
-    if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.journal, L.menu, L.events, L.med], tab: [L.admin, L.team, L.menu, L.events, L.med] };
-    if (u.role === "master") return { links: [L.master, L.team, L.journal, L.brew, L.menu, L.med], tab: [L.master, L.team, L.brew, L.menu, L.med] };
-    return { links: [L.client, L.messages, L.brew, L.menu, L.cert, L.pass], tab: [L.client, L.messages, L.brew, L.cert, L.pass] };
+    if (!u) return { links: [L.home, L.preorder, L.alch, L.journal, L.events, L.cert], tab: [L.home, L.preorder, L.alch, L.events, L.cert] };
+    if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.journal, L.preorder, L.events, L.med], tab: [L.admin, L.team, L.preorder, L.events, L.med] };
+    if (u.role === "master") return { links: [L.master, L.team, L.journal, L.brew, L.preorder, L.med], tab: [L.master, L.team, L.brew, L.preorder, L.med] };
+    return { links: [L.client, L.messages, L.preorder, L.alch, L.cert, L.pass], tab: [L.client, L.messages, L.preorder, L.cert, L.pass] };
   }
 
   function renderChrome(path) {
@@ -378,27 +380,18 @@ window.App = (function () {
     document.getElementById("cartOverlay").addEventListener("click", closeCart);
     document.getElementById("checkoutBtn").addEventListener("click", async () => {
       if (!window.Store.get().cart.length) return;
-      const cart = window.Store.get().cart.slice();
-      const total = UI.rub(window.Store.cartTotal());
-      const u = Auth.current();
-      // создаём реальный заказ в базе (списывает склад, копит аналитику)
-      const order = window.Orders.create({
-        userId: u ? u.id : null,
-        userName: u ? u.name : "Гость",
-        items: cart,
-        channel: "self",
-      });
-      window.Store.clearCart();
-      renderCart(); updateCartBadge();
-      const synced = !window.ApiClient || !ApiClient.isReady() ? false : await ApiClient.whenSynced("orders", order.id);
-      UI.toast(synced ? "Заказ передан мастеру · " + total : "Заказ сохранён на этом устройстве · " + total);
       closeCart();
+      if (window.Commerce) {
+        Commerce.openCheckout();
+        return;
+      }
+      UI.toast("Форма предзаказа временно недоступна");
     });
 
     render();
   }
 
-  return { init, render, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, afterAuth, logout };
+  return { init, render, renderCart, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, closeCart, afterAuth, logout };
 })();
 
 document.addEventListener("DOMContentLoaded", App.init);

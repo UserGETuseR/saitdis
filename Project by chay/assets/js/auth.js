@@ -139,22 +139,24 @@ window.Auth = (function () {
       return load().users.some((u) => (u.login || "").toLowerCase() === key && u.id !== exceptId);
     },
 
-    register({ name, login, pass, pass2, email, role, branchId="sochi" }) {
+    register({ name, login, pass, pass2, email, phone, role, branchId="sochi" }) {
       name = (name || "").trim();
       login = (login || "").trim();
       email = (email || "").trim().toLowerCase();
+      phone = (phone || "").replace(/[^\d+]/g, "");
       if (name.length < 2) return { ok: false, error: "Введите имя" };
       const lv = this.validateLogin(login);
       if (!lv.ok) return lv;
       if ((pass || "").length < 4) return { ok: false, error: "Пароль минимум 4 символа" };
       if (pass2 !== undefined && pass !== pass2) return { ok: false, error: "Пароли не совпадают" };
       if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Некорректный e-mail" };
+      if (phone.replace(/\D/g, "").length < 10) return { ok:false, error:"Укажите номер телефона для карты лояльности" };
       const db = load();
       if (db.users.some((u) => (u.login || "").toLowerCase() === login.toLowerCase()))
         return { ok: false, error: "Такой логин уже занят" };
       const id = "u_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const user = {
-        id, name, login, email: email || "", pass: hash(pass), branchId,
+        id, name, login, email: email || "", phone, pass: hash(pass), branchId,
         role: role === "master" ? "master" : "client",
         createdAt: Date.now(), avatarColor: avatarColor(name + login), initials: initials(name),
         profile: newProfile(role),
@@ -202,7 +204,7 @@ window.Auth = (function () {
     },
 
     // обновление полей аккаунта (имя, логин, e-mail, цвет аватара)
-    updateAccount({ name, login, email, avatarColor: ac, branchId }) {
+    updateAccount({ name, login, email, phone, avatarColor: ac, branchId }) {
       const u = current(); if (!u) return { ok: false, error: "Не выполнен вход" };
       const db = load();
       const idx = db.users.findIndex((x) => x.id === u.id);
@@ -221,9 +223,14 @@ window.Auth = (function () {
         email = email.trim().toLowerCase();
         if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Некорректный e-mail" };
       }
+      if (phone !== undefined) {
+        phone = String(phone || "").replace(/[^\d+]/g, "");
+        if (phone.replace(/\D/g, "").length < 10) return { ok:false, error:"Укажите корректный номер телефона" };
+      }
       if (name !== undefined) { db.users[idx].name = name; db.users[idx].initials = initials(name); }
       if (login !== undefined) db.users[idx].login = login;
       if (email !== undefined) db.users[idx].email = email;
+      if (phone !== undefined) db.users[idx].phone = phone;
       if (ac) db.users[idx].avatarColor = ac;
       if (branchId !== undefined) db.users[idx].branchId = branchId;
       persist(db);

@@ -6,7 +6,7 @@
 //   • Внешние (шрифты Google, иконки CDN) — cache-first (офлайн после первого визита).
 // При смене версии меняй CACHE — старые кеши очищаются на activate.
 
-const CACHE = "cha-cache-v27";
+const CACHE = "cha-cache-v28-director";
 
 const CORE = [
   "./",
@@ -17,6 +17,7 @@ const CORE = [
   "./assets/css/styles.css?v=12",
   "./assets/css/revamp-2026.css?v=20260822.1",
   "./assets/css/brand-2026.css?v=20260823.20",
+  "./assets/css/director-2026.css?v=20260826.1",
   "./БРЕНБУК/assets/logo-color.png",
   "./БРЕНБУК/assets/logo-cream-on-dark.png",
   "./БРЕНБУК/assets/logo-mark-color.png",
@@ -30,6 +31,7 @@ const CORE = [
   "./assets/js/data.elixirs.js",
   "./assets/js/data.services.js",
   "./assets/js/data.drinks.js",
+  "./assets/js/data.commerce.js?v=20260826.1",
   "./assets/js/data.events.js",
   "./assets/js/data.practices.js",
   "./assets/js/db.js",
@@ -38,6 +40,7 @@ const CORE = [
   "./assets/js/content.js?v=20260823.1",
   "./assets/js/inventory.js?v=20260823.3",
   "./assets/js/orders.js?v=20260823.1",
+  "./assets/js/notifications.js?v=20260826.1",
   "./assets/js/shifts.js?v=20260823.1",
   "./assets/js/store.js",
   "./assets/js/auth.js?v=20260823.1",
@@ -47,7 +50,9 @@ const CORE = [
   "./assets/js/views.js?v=20260823.3",
   "./assets/js/views.next.js?v=20260823.5",
   "./assets/js/views.content.js?v=20260823.1",
-  "./assets/js/app.js?v=20260823.6",
+  "./assets/js/views.director.js?v=20260826.1",
+  "./assets/js/commerce.js?v=20260826.1",
+  "./assets/js/app.js?v=20260826.1",
   "./img/matcha-lineup-v1.png",
 ];
 

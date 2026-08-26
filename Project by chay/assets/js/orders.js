@@ -29,7 +29,19 @@ window.Orders = (function () {
         if (m) sub = m.name;
       }
     }
-    return { teaId: item.teaId || null, mushroomId: item.mushroomId || null, name: name || "Позиция", sub, price: item.price };
+    return {
+      teaId: item.teaId || null,
+      mushroomId: item.mushroomId || null,
+      kind: item.kind || (item.teaId ? "tea" : "product"),
+      sku: item.sku || null,
+      name: name || "Позиция",
+      sub,
+      grams: item.grams ? Number(item.grams) : null,
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      unit: item.unit || "шт",
+      addons: Array.isArray(item.addons) ? item.addons.slice(0, 12) : [],
+      price: Number(item.price) || 0,
+    };
   }
 
   return {
@@ -37,7 +49,7 @@ window.Orders = (function () {
     all: () => {const u=window.Auth?.current?.(),branchId=window.Branches?.current?.().id||u?.branchId||"sochi";return col.all().filter((order)=>u?.role==="client"?order.userId===u.id:(order.branchId||"sochi")===branchId).slice().sort((a, b) => b.ts - a.ts);},
     byId: (id) => col.byId(id),
 
-    create({ userId, userName, masterId, items, channel }) {
+    create({ userId, userName, masterId, items, channel, fulfillment, phone, address, scheduledAt, notification, note }) {
       const snap = (items || []).map(snapshot);
       const total = snap.reduce((s, x) => s + (x.price || 0), 0);
       const order = col.insert({
@@ -50,6 +62,12 @@ window.Orders = (function () {
         total,
         channel: channel || "self",
         status: "new",
+        fulfillment: fulfillment === "delivery" ? "delivery" : "pickup",
+        phone: String(phone || "").trim(),
+        address: String(address || "").trim(),
+        scheduledAt: scheduledAt || null,
+        notification: ["in_app", "call", "telegram"].includes(notification) ? notification : "in_app",
+        note: String(note || "").trim(),
       });
       // списываем склад
       if (window.Inventory) snap.forEach((it) => Inventory.consumeForItem(it));

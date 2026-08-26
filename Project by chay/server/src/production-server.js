@@ -73,6 +73,14 @@ function cleanPassword(value) {
   return password;
 }
 
+function cleanPhone(value, required = false) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits && !required) return "";
+  if (digits.length < 10 || digits.length > 15) throw Object.assign(new Error("Укажите корректный номер телефона"), { status:400 });
+  const normalized = digits.length === 10 ? `7${digits}` : digits[0] === "8" && digits.length === 11 ? `7${digits.slice(1)}` : digits;
+  return `+${normalized}`;
+}
+
 function publicUser(row) { return repo.user(row); }
 function avatarColor(seed) {
   const colors = ["#c4452f", "#c9a04e", "#7e9b6f", "#8a7b9c", "#2c6e7e", "#b5654a"];
@@ -87,7 +95,7 @@ async function actor(req) {
   const session = await repo.sessionByTokenHash(tokenHash(token));
   if (!session) return null;
   repo.touchSession(session.id).catch(() => {});
-  return { id:session.user_id, name:session.name, login:session.login, email:session.email||"", role:session.role, branchId:session.branch_id||null, avatarColor:session.avatar_color, profile:session.profile||{}, createdAt:+new Date(session.created_at), sessionId:session.id, sessionToken:token };
+  return { id:session.user_id, name:session.name, login:session.login, email:session.email||"", phone:session.phone||"", role:session.role, branchId:session.branch_id||null, avatarColor:session.avatar_color, profile:session.profile||{}, createdAt:+new Date(session.created_at), sessionId:session.id, sessionToken:token };
 }
 
 function requireActor(value) { if (!value) throw Object.assign(new Error("Необходимо войти"), { status: 401 }); return value; }
@@ -121,13 +129,14 @@ async function route(req, res) {
 
   if (req.method === "POST" && path === "/api/auth/register") {
     rateLimit(`register:${clientIp(req)}`, 8, 10 * 60_000);
-    const data = await body(req); const login = cleanLogin(data.login); const name = cleanName(data.name); const password = cleanPassword(data.password);
+    const data = await body(req); const login = cleanLogin(data.login); const name = cleanName(data.name); const phone=cleanPhone(data.phone,true); const password = cleanPassword(data.password);
     if (data.password2 !== undefined && data.password2 !== password) throw Object.assign(new Error("Пароли не совпадают"), { status:400 });
     const email = String(data.email || "").trim().toLowerCase();
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw Object.assign(new Error("Некорректный e-mail"), { status:400 });
     if (await repo.userByLogin(login)) throw Object.assign(new Error("Такой логин уже занят"), { status:409 });
+    if (await repo.userByPhone(phone)) throw Object.assign(new Error("Этот номер уже привязан к карте лояльности"), { status:409 });
     const pass = await hashPassword(password);
-    const row = await repo.createUser({ login,name,email,branchId:data.branchId||"sochi",salt:pass.salt,hash:pass.hash,avatarColor:avatarColor(name+login),profile:defaultProfile() });
+    const row = await repo.createUser({ login,name,email,phone,branchId:data.branchId||"sochi",salt:pass.salt,hash:pass.hash,avatarColor:avatarColor(name+login),profile:defaultProfile() });
     await repo.audit(row.id,"register","user",row.id,null,{ login:row.login, role:row.role });
     return startSession(req,res,row);
   }
@@ -151,6 +160,7 @@ async function route(req, res) {
     if(data.name!==undefined)patch.name=cleanName(data.name);
     if(data.login!==undefined)patch.login=cleanLogin(data.login);
     if(data.email!==undefined){const email=String(data.email||"").trim().toLowerCase();if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))throw Object.assign(new Error("Некорректный e-mail"),{status:400});patch.email=email;}
+    if(data.phone!==undefined){const phone=cleanPhone(data.phone,true);const duplicate=await repo.userByPhone(phone);if(duplicate&&duplicate.id!==current.id)throw Object.assign(new Error("Этот номер уже привязан к другой карте"),{status:409});patch.phone=phone;}
     if(data.avatarColor!==undefined&&/^#[0-9a-f]{6}$/i.test(data.avatarColor))patch.avatarColor=data.avatarColor;
     if(data.profile&&typeof data.profile==="object")patch.profile=data.profile;
     if(data.branchId!==undefined){if(current.role!=="client")throw Object.assign(new Error("Рабочий город сотрудника назначает директор"),{status:403});patch.branchId=String(data.branchId||"").toLowerCase();}
@@ -169,6 +179,9 @@ async function route(req, res) {
   if (req.method === "GET" && path === "/api/team") { const current=requireActor(who);const branchId=current.role==="owner"?(url.searchParams.get("branch")||"sochi"):(current.branchId||"sochi");return json(res,200,{ok:true,items:await repo.publicTeam(branchId)}); }
   if (req.method === "GET" && path === "/api/branches/summary") { const current=requireRole(who,STAFF);return json(res,200,{ok:true,items:await repo.branchSummaries(current)}); }
   if (req.method === "GET" && path === "/api/loyalty") { const current=requireActor(who); return json(res,200,{ok:true,loyalty:await repo.loyalty(current.id)}); }
+  if (req.method === "GET" && path === "/api/loyalty/search") { const current=requireRole(who,STAFF);const phone=cleanPhone(url.searchParams.get("phone"),true);const target=await repo.userByPhone(phone);if(!target||target.role!=="client"||current.role!=="owner"&&target.branch_id!==current.branchId)throw Object.assign(new Error("Карта гостя не найдена"),{status:404});return json(res,200,{ok:true,user:publicUser(target),loyalty:await repo.loyalty(target.id)}); }
+  const notificationMatch=path.match(/^\/api\/notifications\/([^/]+)\/read$/);
+  if(req.method==="PATCH"&&notificationMatch){const current=requireActor(who);await repo.readNotification(current,notificationMatch[1]);return json(res,200,{ok:true});}
   if(req.method==="GET"&&path==="/api/integrations/1c/status"){requireRole(who,ADMIN);let probe=null;if(url.searchParams.get("probe")==="1"&&oneC.configured){try{const result=await oneC.probe();probe={ok:true,status:result.status};}catch(error){probe={ok:false,error:error.message};}}return json(res,200,{ok:true,integration:{...oneC.publicConfig,queue:await repo.oneCQueueStatus(),probe}});}
   if(req.method==="POST"&&path==="/api/inventory/movements"){
     const current=requireRole(who,ADMIN);const data=await body(req);
@@ -187,7 +200,7 @@ async function route(req, res) {
   }
 
   if(req.method==="POST"&&path==="/api/public/orders"){
-    rateLimit(`order:${clientIp(req)}`,30,60*60_000);const data=await body(req);const items=Array.isArray(data.items)?data.items.slice(0,50):[];if(!items.length)throw Object.assign(new Error("Корзина пуста"),{status:400});const total=Number(data.total)||0;if(total<0||total>1000000)throw Object.assign(new Error("Некорректная сумма"),{status:400});const id=safeId(data.id,"ord");await repo.createPublicOrder({id,userId:who?.id,branchId:who?.branchId||data.branchId||"sochi",userName:who?.name||String(data.userName||"Гость").slice(0,100),items,total,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,status:"new"});
+    rateLimit(`order:${clientIp(req)}`,30,60*60_000);const data=await body(req);const items=Array.isArray(data.items)?data.items.slice(0,50):[];if(!items.length)throw Object.assign(new Error("Корзина пуста"),{status:400});const total=Number(data.total)||0;if(total<0||total>1000000)throw Object.assign(new Error("Некорректная сумма"),{status:400});const phone=cleanPhone(data.phone||who?.phone,true);const fulfillment=data.fulfillment==="delivery"?"delivery":"pickup";const address=String(data.address||"").trim();if(fulfillment==="delivery"&&address.length<8)throw Object.assign(new Error("Укажите адрес доставки"),{status:400});const scheduledAt=Number(data.scheduledAt)||0;if(scheduledAt&&scheduledAt<Date.now()-60_000)throw Object.assign(new Error("Время предзаказа уже прошло"),{status:400});const id=safeId(data.id,"ord");await repo.createPublicOrder({id,userId:who?.id,branchId:who?.branchId||data.branchId||"sochi",userName:who?.name||String(data.userName||"Гость").slice(0,100),items,total,phone,fulfillment,address,scheduledAt,notification:data.notification,note:data.note,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,status:"new"});
   }
 
   const recordMatch=path.match(/^\/api\/records\/([a-z_]+)(?:\/([^/]+))?$/);
