@@ -9,8 +9,8 @@
 //     не залипал навсегда на первой закэшированной версии.
 // При смене версии меняй CACHE — старые кеши очищаются на activate.
 
-const CACHE = "cha-cache-v41-teahouse";
-const ASSET_VERSION = "20260903";
+const CACHE = "cha-cache-v42-teahouse";
+const ASSET_VERSION = "20260903.1";
 
 // Пути, которые service worker обязан пропускать напрямую в сеть.
 const BYPASS = [/^\/api\//];

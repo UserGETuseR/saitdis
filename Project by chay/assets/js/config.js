@@ -16,7 +16,7 @@ window.CHA_CONFIG = {
   backend: "auto",
   apiBase: "/api",
   allowDemoAccounts: false,
-  appVersion: "20260903",
+  appVersion: "20260903.1",
 };
 
 // Демо-контур разрешён только когда оба условия совпали явно.

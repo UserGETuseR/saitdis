@@ -22,10 +22,10 @@ test("service worker не кэширует ответы API", () => {
   assert.match(sw, /function cachePut[\s\S]{0,400}BYPASS\.some\(\(rule\) => rule\.test\(url\.pathname\)\)\) return;/);
   // Одна версия ресурсов на index.html и precache — иначе кэш не совпадёт.
   const html = read("index.html");
-  const version = sw.match(/const ASSET_VERSION = "(\d+)"/);
+  const version = sw.match(/const ASSET_VERSION = "([0-9.]+)"/);
   assert.ok(version, "в sw.js должна быть объявлена версия ресурсов");
   assert.ok(html.includes(`?v=${version[1]}`), "index.html должен использовать ту же версию ресурсов");
-  const stale = html.match(/assets\/(js|css)\/[\w.-]+\?v=(?!20260903)[\w.]+/g);
+  const stale = html.match(/assets\/(js|css)\/[\w.-]+\?v=(?!20260903\.1)[\w.]+/g);
   assert.equal(stale, null, `в index.html остались устаревшие версии: ${stale}`);
 });
 

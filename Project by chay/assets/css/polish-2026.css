@@ -785,10 +785,19 @@ body,
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 0 !important;
     overflow: hidden !important;
-    background: rgba(14, 14, 14, .97) !important;
+    background: rgba(252, 250, 244, .98) !important;
+    border-top: 1px solid rgba(30, 24, 18, .16) !important;
+    box-shadow: 0 -10px 32px rgba(30, 24, 18, .08) !important;
   }
 
-  .tabbar a { min-width: 0 !important; padding: 6px 2px !important; gap: 3px !important; font-size: 8px !important; }
+  .tabbar a {
+    min-width: 0 !important;
+    padding: 6px 2px !important;
+    gap: 3px !important;
+    font-size: 8px !important;
+    color: rgba(14, 14, 14, .64) !important;
+  }
+  .tabbar a.active { color: var(--terra) !important; }
   .tabbar a i { font-size: 16px !important; }
 
   .tea-house-hero { padding: 94px 16px 16px; gap: 18px; }
