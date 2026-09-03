@@ -413,17 +413,13 @@ Views.elixirs = function () {
           <div class="ex-ded-wrap">${UI.dedMark("r" + i, "ex-ded")}</div>
           <div class="ex-pair">
             <div class="ex-teas">
+              ${(e.teas || []).map((tea, index) => `
+              ${index ? `<span class="ex-or">или</span>` : ""}
               <div class="ex-tea">
-                <i class="bi ${e.teas[0].icon}"></i>
-                <b>${e.teas[0].name}</b>
-                <span>${e.teas[0].desc}</span>
-              </div>
-              <span class="ex-or">или</span>
-              <div class="ex-tea">
-                <i class="bi ${e.teas[1].icon}"></i>
-                <b>${e.teas[1].name}</b>
-                <span>${e.teas[1].desc}</span>
-              </div>
+                <i class="bi ${tea.icon}"></i>
+                <b>${tea.name}</b>
+                <span>${tea.desc}</span>
+              </div>`).join("")}
             </div>
             <div class="ex-plus"><i class="bi bi-plus-lg"></i></div>
             <div class="ex-ingredient">
@@ -599,61 +595,62 @@ Views.auth = function () {
   const html = `
     <header class="hero short">
       <div class="kanji-bg" aria-hidden="true">門</div>
-      <div class="brand-mark">Вход в пространство</div>
+      <div class="brand-mark">Кабинет гостя</div>
       <h1 id="authTitle">С возвращением</h1>
-      <p class="lead">Войди, чтобы сохранять любимые сорта, практики и историю в разделе «Мой чай».</p>
+      <p class="lead">Войдите, чтобы сохранять любимые сорта, отметки лояльности и историю заказов в разделе «Мой чай».</p>
     </header>
     <section class="wrap narrow">
       <div class="auth-card">
-        <div class="auth-tabs">
-          <button class="auth-tab active" data-tab="login"><i class="bi bi-box-arrow-in-right"></i> Вход</button>
-          <button class="auth-tab" data-tab="register"><i class="bi bi-person-plus"></i> Регистрация</button>
+        <div class="auth-tabs" role="tablist" aria-label="Вход или регистрация">
+          <button type="button" role="tab" aria-selected="true" aria-controls="authForm" class="auth-tab active" data-tab="login"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Вход</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="authForm" class="auth-tab" data-tab="register"><i class="bi bi-person-plus" aria-hidden="true"></i> Регистрация</button>
         </div>
 
         <form id="authForm" class="auth-form">
           <div class="field reg-only hidden">
-            <label><i class="bi bi-person"></i> Имя</label>
-            <input type="text" name="name" autocomplete="name" placeholder="Как тебя называть" />
+            <label for="authName"><i class="bi bi-person"></i> Имя</label>
+            <input id="authName" type="text" name="name" autocomplete="name" placeholder="Как к вам обращаться" />
           </div>
           <div class="field">
-            <label><i class="bi bi-at"></i> Логин</label>
-            <input type="text" name="login" autocomplete="username" placeholder="придумай логин" />
-            <small class="field-hint reg-only hidden">Латиница, цифры и . _ - · 3–20 символов</small>
+            <label for="authLogin"><i class="bi bi-at"></i> Логин</label>
+            <input id="authLogin" type="text" name="login" autocomplete="username" placeholder="придумай логин" aria-describedby="authLoginHint" />
+            <small id="authLoginHint" class="field-hint reg-only hidden">Латиница, цифры и . _ - · 3–20 символов</small>
           </div>
           <div class="field">
-            <label><i class="bi bi-lock"></i> Пароль</label>
+            <label for="authPass"><i class="bi bi-lock"></i> Пароль</label>
             <div class="pass-wrap">
-              <input type="password" name="pass" autocomplete="current-password" placeholder="••••••" />
-              <button type="button" class="pass-eye" data-eye><i class="bi bi-eye"></i></button>
+              <input id="authPass" type="password" name="pass" autocomplete="current-password" placeholder="••••••" aria-describedby="authPassHint" />
+              <button type="button" class="pass-eye" data-eye aria-label="Показать пароль" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
             </div>
+            <small id="authPassHint" class="field-hint reg-only hidden">Минимум 8 символов</small>
           </div>
           <div class="field reg-only hidden">
-            <label><i class="bi bi-lock-fill"></i> Повтор пароля</label>
-            <input type="password" name="pass2" autocomplete="new-password" placeholder="••••••" />
+            <label for="authPass2"><i class="bi bi-lock-fill"></i> Повтор пароля</label>
+            <input id="authPass2" type="password" name="pass2" autocomplete="new-password" placeholder="••••••" />
           </div>
           <div class="field reg-only hidden">
-            <label><i class="bi bi-envelope"></i> E-mail <span class="muted">(необязательно)</span></label>
-            <input type="email" name="email" autocomplete="email" placeholder="для восстановления, по желанию" />
+            <label for="authEmail"><i class="bi bi-envelope"></i> E-mail <span class="muted">(необязательно)</span></label>
+            <input id="authEmail" type="email" name="email" autocomplete="email" placeholder="для восстановления, по желанию" />
           </div>
           <div class="field reg-only hidden">
-            <label><i class="bi bi-phone"></i> Телефон карты лояльности</label>
-            <input type="tel" name="phone" autocomplete="tel" inputmode="tel" placeholder="+7 900 000-00-00" />
-            <small class="field-hint">По этому номеру команда найдёт вашу карту и заказы.</small>
+            <label for="authPhone"><i class="bi bi-phone"></i> Телефон карты лояльности</label>
+            <input id="authPhone" type="tel" name="phone" autocomplete="tel" inputmode="tel" placeholder="+7 900 000-00-00" aria-describedby="authPhoneHint" />
+            <small id="authPhoneHint" class="field-hint">По этому номеру команда найдёт вашу карту и заказы.</small>
           </div>
           <div class="field reg-only hidden">
-            <label><i class="bi bi-bookmark"></i> Ваша чайная глава</label>
-            <select name="branchId">${(window.Branches?.all?.()||[]).map((branch)=>`<option value="${branch.id}" ${branch.id===(window.Branches?.current?.().id||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select>
+            <label for="authBranch"><i class="bi bi-bookmark"></i> Ваша чайная глава</label>
+            <select id="authBranch" name="branchId">${(window.Branches?.all?.()||[]).map((branch)=>`<option value="${branch.id}" ${branch.id===(window.Branches?.current?.().id||"sochi")?"selected":""}>${branch.city} · ${branch.chapter}</option>`).join("")}</select>
             <small class="field-hint">Сообщения и заказы увидит команда выбранного города. Лояльность действует во всей сети.</small>
           </div>
           <div class="field reg-only hidden">
-            <label><i class="bi bi-people"></i> Кто ты в чайной</label>
+            <label id="roleFieldLabel"><i class="bi bi-people"></i> Ваша роль</label>
             <div class="role-pick">
-              <label class="role-opt"><input type="radio" name="role" value="client" checked /><span><i class="bi bi-cup-hot"></i> Гость / клиент</span></label>
-              <label class="role-opt"><input type="radio" name="role" value="master" /><span><i class="bi bi-yin-yang"></i> Чайный мастер</span></label>
+              <p class="field-hint" aria-describedby="roleFieldLabel"><i class="bi bi-cup-hot"></i> Регистрация создаёт кабинет гостя. Роль чайного мастера или управляющей назначает директор сети — так права нельзя получить с формы регистрации.</p>
+
             </div>
           </div>
 
-          <div id="authError" class="auth-error hidden"></div>
+          <div id="authError" class="auth-error hidden" role="alert" aria-live="assertive"></div>
           <button type="submit" class="btn primary full" id="authSubmit"><i class="bi bi-box-arrow-in-right"></i> Войти</button>
         </form>
 
@@ -674,19 +671,27 @@ Views.auth = function () {
       const err = root.querySelector("#authError");
       const title = root.querySelector("#authTitle");
       const submit = root.querySelector("#authSubmit");
+      // Демо-блок удаляется из DOM, а не скрывается классом: скрытая кнопка
+      // остаётся кликабельной при любой ошибке в стилях.
+      if (!(typeof Auth.isDemoAllowed === "function" && Auth.isDemoAllowed())) root.querySelector("#authDemo")?.remove();
       if (Auth.isCloud()) {
-        root.querySelector("#authDemo").classList.add("hidden");
         const rolePick = root.querySelector(".role-pick")?.closest(".field");
         if (rolePick) rolePick.classList.add("cloud-role-field");
       } else {
-        root.querySelector("#authSecurity").innerHTML = '<i class="bi bi-device-hdd"></i> Локальный режим разработки: данные хранятся только в этом браузере.';
+        root.querySelector("#authSecurity").innerHTML = (typeof Auth.isDemoAllowed === "function" && Auth.isDemoAllowed())
+          ? '<i class="bi bi-device-hdd"></i> Локальный режим презентации: данные хранятся только в этом браузере.'
+          : '<i class="bi bi-wifi-off"></i> Нет связи с сервером чайной. Каталог доступен, вход в кабинет появится после восстановления соединения.';
       }
 
       function setMode(m) {
         mode = m;
-        root.querySelectorAll(".auth-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === m));
+        root.querySelectorAll(".auth-tab").forEach((t) => {
+          const active = t.dataset.tab === m;
+          t.classList.toggle("active", active);
+          t.setAttribute("aria-selected", active ? "true" : "false");
+        });
         root.querySelectorAll(".reg-only").forEach((f) => f.classList.toggle("hidden", m !== "register"));
-        title.textContent = m === "login" ? "С возвращением" : "Стань частью историй";
+        title.textContent = m === "login" ? "С возвращением" : "Создать кабинет";
         submit.innerHTML = m === "login"
           ? '<i class="bi bi-box-arrow-in-right"></i> Войти'
           : '<i class="bi bi-person-plus"></i> Создать аккаунт';
@@ -700,12 +705,19 @@ Views.auth = function () {
         e.preventDefault();
         submit.disabled = true;
         const data = Object.fromEntries(new FormData(form).entries());
-        const res = await (mode === "login"
-          ? Auth.login(data.login, data.pass)
-          : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, phone:data.phone, branchId:data.branchId||"sochi", role: "client" }));
-        submit.disabled = false;
-        if (!res.ok) { showErr(res.error); return; }
-        App.afterAuth(res.user);
+        try {
+          const res = await (mode === "login"
+            ? Auth.login(data.login, data.pass)
+            : Auth.register({ name: data.name, login: data.login, pass: data.pass, pass2: data.pass2, email: data.email, phone:data.phone, branchId:data.branchId||"sochi" }));
+          if (!res || !res.ok) { showErr((res && res.error) || "Не удалось выполнить вход"); return; }
+          App.afterAuth(res.user);
+        } catch (error) {
+          showErr(error.message || "Сервис временно недоступен. Попробуйте ещё раз.");
+        } finally {
+          // Кнопка всегда возвращается в рабочее состояние, иначе форма
+          // остаётся заблокированной до перезагрузки страницы.
+          submit.disabled = false;
+        }
       });
 
       // показать/скрыть пароль
@@ -715,13 +727,14 @@ Views.auth = function () {
         const show = inp.type === "password";
         inp.type = show ? "text" : "password";
         eye.querySelector("i").className = show ? "bi bi-eye-slash" : "bi bi-eye";
+        // Состояние переключателя передаётся в доступное дерево, а не только классом.
+        eye.setAttribute("aria-pressed", show ? "true" : "false");
+        eye.setAttribute("aria-label", show ? "Скрыть пароль" : "Показать пароль");
       });
 
       root.querySelectorAll("[data-demo]").forEach((b) =>
         b.addEventListener("click", async () => {
-          const creds = { master: ["master", "master"], admin: ["admin", "admin"], client: ["anna", "anna"] };
-          const cred = creds[b.dataset.demo] || creds.client;
-          const res = await Auth.login(cred[0], cred[1]);
+          const res = await Auth.demoLogin(b.dataset.demo || "client");
           if (res.ok) App.afterAuth(res.user); else showErr(res.error);
         })
       );
@@ -741,7 +754,7 @@ Views.meditate = function () {
       <div class="kanji-bg" aria-hidden="true">禅</div>
       <div class="brand-mark">Практики</div>
       <h1>Дыхание и тишина</h1>
-      <p class="lead">Чай начинается с дыхания. Замедлись здесь — и каждая чашка станет глубже.</p>
+      <p class="lead">Чай начинается с дыхания. Замедлитесь здесь — и каждая чашка станет глубже.</p>
       <div class="brush-divider" aria-hidden="true"></div>
     </header>
 
@@ -757,14 +770,14 @@ Views.meditate = function () {
 
       <div class="gongfu" id="gongfu">
         <div class="gf-head"><i class="bi bi-stopwatch"></i> Гунфу-таймер заваривания</div>
-        <p class="muted">Выбери чай — Дед подскажет температуру, навеску и время проливов.</p>
+        <p class="muted">Выберите чай — Чайный дед подскажет температуру, навеску и время проливов.</p>
         <div class="gf-controls">
-          <select id="gfTea" class="gf-select">${teaOpts}</select>
+          <select id="gfTea" class="gf-select" aria-label="Чай для таймера проливов">${teaOpts}</select>
           <button class="btn small ghost" id="gfReset"><i class="bi bi-arrow-counterclockwise"></i> Сброс</button>
         </div>
         <div class="gf-info" id="gfInfo"></div>
         <div class="gf-stage">
-          <div class="gf-orb" id="gfOrb"><span class="gf-count" id="gfCount">—</span></div>
+          <div class="gf-orb" id="gfOrb"><span class="gf-count" id="gfCount" role="timer" aria-live="polite" aria-atomic="true" aria-label="Осталось секунд">—</span></div>
           <div class="gf-meta" id="gfMeta">Пролив 1</div>
           <button class="btn primary" id="gfStart"><i class="bi bi-play-fill"></i> Старт пролива</button>
         </div>
@@ -815,9 +828,10 @@ Views.meditate = function () {
         <div class="jr-moods" id="jrMoods">
           ${["Спокойствие", "Радость", "Ясность", "Тепло", "Усталость", "Грусть"].map((m) => `<button class="jr-mood" data-mood="${m}">${m}</button>`).join("")}
         </div>
+        <label class="sr-only" for="jrNote">Заметка в чайный дневник</label>
         <input type="text" id="jrNote" class="jr-note" maxlength="120" placeholder="Ноты вкуса, мысль, благодарность…" />
         <div class="jr-row">
-          <select id="jrTea" class="gf-select"><option value="">Без чая</option>${teaOpts}</select>
+          <select id="jrTea" class="gf-select" aria-label="Чай к записи дневника"><option value="">Без чая</option>${teaOpts}</select>
           <button class="btn small" id="jrSave"><i class="bi bi-plus-lg"></i> Записать</button>
         </div>
         <div class="jr-list" id="jrList"></div>
@@ -833,14 +847,17 @@ Views.meditate = function () {
       function stopBreath() {
         clearTimeout(timer); clearInterval(tick); timer = tick = null;
       }
+      // Дыхательная практика и гунфу-таймер останавливаются при уходе с экрана:
+      // раньше они продолжали идти и проигрывали сигнал на другой странице.
+      App.onLeave?.(stopBreath);
 
       function startBreath(b) {
         stopBreath();
         stage.classList.remove("hidden");
         stage.innerHTML = `
           <div class="breath-inner" style="--mc:${b.color}">
-            <div class="breath-orb"><div class="breath-core"></div><span class="breath-count">•</span></div>
-            <div class="breath-phase">Приготовься…</div>
+            <div class="breath-orb"><div class="breath-core"></div><span class="breath-count" role="timer" aria-live="off">•</span></div>
+            <div class="breath-phase" role="status" aria-live="polite" aria-atomic="true">Приготовься…</div>
             <div class="breath-meta"><span class="bm-cycle">Цикл 1 / ${b.cycles}</span> · ${b.name}</div>
             <button class="btn ghost small" id="breathStop"><i class="bi bi-stop-fill"></i> Остановить</button>
           </div>`;
@@ -881,7 +898,7 @@ Views.meditate = function () {
             Auth.addPractice({ breath: true, minutes: mins });
             UI.toast(`Практика засчитана · +${mins} мин`);
           } else {
-            UI.toast("Войди, чтобы сохранять прогресс практик");
+            UI.toast("Войдите, чтобы сохранять прогресс практик");
           }
         }
 
@@ -923,6 +940,7 @@ Views.meditate = function () {
         const startBtn = root.querySelector("#gfStart");
         const resetBtn = root.querySelector("#gfReset");
         let infusion = 1, gfTimer = null, gfTick = null, running = false;
+        App.onLeave?.(() => { clearTimeout(gfTimer); clearInterval(gfTick); running = false; });
 
         function profile(tea) {
           const c = tea.cat;
@@ -1040,12 +1058,15 @@ Views.meditate = function () {
             </div>`;
           modal.classList.add("open");
           modal.querySelector("[data-close]").addEventListener("click", close);
-          modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+          // #modal живёт всё время работы приложения, а render() вызывается на
+          // каждый шаг практики. Присваивание onclick заменяет обработчик,
+          // тогда как addEventListener накапливал по одному замыканию на шаг.
+          modal.onclick = (e) => { if (e.target === modal) close(); };
           const prev = modal.querySelector("#msPrev");
           if (prev) prev.addEventListener("click", () => { if (step > 0) { step--; render(); } });
           modal.querySelector("#msNext").addEventListener("click", () => {
             if (step < m.steps.length - 1) { step++; render(); }
-            else { close(); if (Auth.current()) { Auth.addPractice({ minutes: m.minutes }); UI.toast(`Медитация завершена · +${m.minutes} мин`); } else UI.toast("Войди, чтобы сохранять прогресс"); }
+            else { close(); if (Auth.current()) { Auth.addPractice({ minutes: m.minutes }); UI.toast(`Медитация завершена · +${m.minutes} мин`); } else UI.toast("Войдите, чтобы сохранять прогресс"); }
           });
         }
         function close() { modal.classList.remove("open"); modal.innerHTML = ""; }
@@ -1167,7 +1188,9 @@ Views.client = function () {
    ============================================================ */
 Views.master = function () {
   const u = Auth.current();
-  if (!u || u.role !== "master") return Views.auth();
+  // Касса и рабочий стол мастера доступны и управляющей с директором: сервер
+  // разрешает им работать с заказами, а экран прежде отсекал по точной роли.
+  if (!u || !["master", "admin", "owner"].includes(u.role)) return Views.auth();
   const p = u.profile;
   const clients = Auth.listClients();
   const featured = window.TEAS[Math.floor(Date.now() / 86400000) % window.TEAS.length];
@@ -1251,7 +1274,7 @@ Views.master = function () {
             <span><i class="bi bi-moon-stars"></i> ${c.profile.meditationMinutes || 0} мин</span>
           </div>`).join("") : `<div class="db-row"><span class="muted">Пока нет зарегистрированных гостей.</span></div>`}
       </div>
-      <p class="disclaimer"><i class="bi bi-shield-lock"></i> Данные гостей — демо из локальной базы прототипа. В боевой версии — защищённое хранилище и согласие на обработку данных.</p>
+      <p class="disclaimer"><i class="bi bi-shield-lock"></i> Данные гостей хранятся на защищённом сервере чайной. Карта привязана к номеру телефона, каждое обращение к ней попадает в журнал аудита.</p>
     </section>`;
   return {
     html,
@@ -1275,11 +1298,17 @@ Views.master = function () {
           </div>`;
         }).join("");
         box.querySelectorAll("[data-shift-toggle]").forEach((b) =>
-          b.addEventListener("click", () => {
+          b.addEventListener("click", async () => {
             const [id, status] = b.dataset.shiftToggle.split("|");
             const next = status === "open" ? "closed" : "open";
-            Shifts.setStatus(id, next);
-            UI.toast(next === "open" ? "Смена открыта · доброй работы" : "Смена закрыта");
+            b.disabled = true;
+            const shift = Shifts.setStatus(id, next);
+            if (!shift) { UI.toast("Отмечать можно только свою смену"); App.render(); return; }
+            // Отметка подтверждается сервером: раньше сообщение об успехе
+            // появлялось даже когда запись не сохранялась.
+            const synced = window.ApiClient?.isReady?.() ? await ApiClient.whenSynced("shifts", id) : true;
+            if (!synced) UI.toast("Сервер не подтвердил отметку. Проверьте связь.");
+            else UI.toast(next === "open" ? "Смена открыта · доброй работы" : "Смена закрыта");
             App.render();
           }));
       })();
@@ -1342,10 +1371,14 @@ Views.master = function () {
         box.innerHTML = active.map((o) => {
           const st = Orders.STATUS[o.status];
           const items = o.items.map((it) => it.name).join(", ");
+          const pickup = o.scheduledAt ? new Date(o.scheduledAt).toLocaleString("ru-RU", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "как можно скорее";
+          const payment = o.payment === "sbp" ? "СБП · отправить QR" : "оплата в чайной";
+          const fulfillment = o.fulfillment === "delivery" ? "доставка" : "самовывоз";
           return `<div class="order-card" style="--sc:${st.color}">
             <div class="oc-top"><span class="oc-status"><i class="bi ${st.icon}"></i> ${st.label}</span><span class="oc-time">${new Date(o.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></div>
             <div class="oc-guest"><i class="bi bi-person"></i> ${o.userName}</div>
             <div class="oc-items">${items}</div>
+            <div class="oc-logistics"><span>${fulfillment} · ${pickup}</span><b>${payment}</b></div>
             <div class="oc-foot"><span class="price">${UI.rub(o.total)}</span>
               <button class="btn small" data-mq="${o.id}"><i class="bi bi-arrow-right-circle"></i> ${o.status === "new" ? "В работу" : "Готов"}</button>
             </div>
@@ -1563,8 +1596,8 @@ Views.admin = function () {
 
     return `
       <div class="spirit-row">
-        <div class="spirit"><div class="si"><i class="bi bi-cash-coin"></i></div><div class="sv">${UI.rub(today.revenue)}</div><div class="sk">выручка сегодня</div></div>
-        <div class="spirit"><div class="si"><i class="bi bi-receipt"></i></div><div class="sv">${today.count}</div><div class="sk">заказов сегодня</div></div>
+        <div class="spirit"><div class="si"><i class="bi bi-cash-coin"></i></div><div class="sv">${UI.rub(today.revenue)}</div><div class="sk">выручка сегодня · закрытые заказы</div></div>
+        <div class="spirit"><div class="si"><i class="bi bi-receipt"></i></div><div class="sv">${today.count}</div><div class="sk">закрыто сегодня${today.activeCount ? ` · ${today.activeCount} в работе на ${UI.rub(today.activeTotal)}` : ""}</div></div>
         <div class="spirit"><div class="si"><i class="bi bi-graph-up"></i></div><div class="sv">${UI.rub(today.avg)}</div><div class="sk">средний чек</div></div>
         <div class="spirit ${low.length ? "spirit-warn" : ""}"><div class="si"><i class="bi bi-exclamation-triangle"></i></div><div class="sv">${low.length}</div><div class="sk">мало на складе</div></div>
       </div>
@@ -1580,7 +1613,7 @@ Views.admin = function () {
           <div class="dc-head"><i class="bi bi-pie-chart"></i> Каналы · неделя</div>
           <div class="chan-row"><span><i class="bi bi-phone"></i> Приложение</span><b>${UI.rub(week.byChannel.self)}</b></div>
           <div class="chan-row"><span><i class="bi bi-shop"></i> Касса в зале</span><b>${UI.rub(week.byChannel.pos)}</b></div>
-          <div class="chan-row total"><span>Всего за неделю</span><b>${UI.rub(week.revenue)}</b></div>
+          <div class="chan-row total"><span>Закрыто за неделю</span><b>${UI.rub(week.revenue)}</b></div>
         </div>
         <div class="dash-card">
           <div class="dc-head"><i class="bi bi-hourglass-split"></i> В работе сейчас</div>
@@ -1601,6 +1634,9 @@ Views.admin = function () {
     const d = new Date(o.ts);
     const items = o.items.map((it) => it.name + (it.sub ? ` <span class="muted">(${it.sub})</span>` : "")).join(", ");
     const canAdvance = o.status === "new" || o.status === "brewing";
+    const pickup = o.scheduledAt ? new Date(o.scheduledAt).toLocaleString("ru-RU", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "как можно скорее";
+    const payment = o.payment === "sbp" ? "СБП · нужен QR" : "оплата в чайной";
+    const fulfillment = o.fulfillment === "delivery" ? "доставка" : "самовывоз";
     return `
       <div class="order-card" style="--sc:${st.color}">
         <div class="oc-top">
@@ -1609,6 +1645,7 @@ Views.admin = function () {
         </div>
         <div class="oc-guest"><i class="bi bi-person"></i> ${o.userName}</div>
         <div class="oc-items">${items}</div>
+        <div class="oc-logistics"><span>${fulfillment} · ${pickup}</span><b>${payment}</b></div>
         <div class="oc-foot">
           <span class="price">${UI.rub(o.total)}</span>
           <span class="oc-actions">
@@ -1670,7 +1707,7 @@ Views.admin = function () {
 
   /* ——— ПЕРСОНАЛ ——— */
   function roleBadge(role) {
-    const map = { admin: { l: "Управляющий", i: "bi-speedometer2" }, master: { l: "Мастер", i: "bi-yin-yang" }, client: { l: "Гость", i: "bi-cup-hot" } };
+    const map = { owner: { l: "Директор сети", i: "bi-diagram-3" }, admin: { l: "Управляющий", i: "bi-speedometer2" }, master: { l: "Мастер", i: "bi-yin-yang" }, client: { l: "Гость", i: "bi-cup-hot" } };
     const m = map[role] || map.client;
     return `<span class="role-badge role-${role}"><i class="bi ${m.i}"></i> ${m.l}</span>`;
   }
@@ -1682,8 +1719,8 @@ Views.admin = function () {
         <span class="db-name">${UI.avatar(c, 32)} ${c.name}<small class="staff-email">@${c.login || "—"}</small></span>
         <span>${roleBadge(c.role)}</span>
         <span class="staff-ctl">
-          ${c.role === "client" ? `<button class="btn small ghost" data-promote="${c.id}"><i class="bi bi-arrow-up-circle"></i> В мастера</button>` : ""}
-          ${c.role === "master" ? `<button class="btn small ghost" data-demote="${c.id}"><i class="bi bi-arrow-down-circle"></i> В гости</button>` : ""}
+          ${c.id !== u.id && c.role === "client" ? `<button class="btn small ghost" data-promote="${c.id}"><i class="bi bi-arrow-up-circle"></i> В мастера</button>` : ""}
+          ${c.id !== u.id && c.role === "master" ? `<button class="btn small ghost" data-demote="${c.id}"><i class="bi bi-arrow-down-circle"></i> В гости</button>` : ""}
           ${c.id === u.id ? `<span class="muted" style="font-size:12px">это вы</span>` : ""}
         </span>
       </div>`;

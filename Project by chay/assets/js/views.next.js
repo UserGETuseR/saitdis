@@ -60,15 +60,111 @@
     return { html, mount(root) { goMount(root); root.querySelectorAll("[data-item]").forEach((b) => b.addEventListener("click", () => App.addMenuItem(b.dataset.item))); root.querySelectorAll("[data-svc]").forEach((b) => b.addEventListener("click", () => App.addService(b.dataset.svc))); root.querySelectorAll("[data-add-tea]").forEach((b) => b.addEventListener("click", () => App.openElixirPicker(b.dataset.addTea))); root.querySelectorAll("[data-fav]").forEach((b) => b.addEventListener("click", () => { Store.toggleFavorite(b.dataset.fav); b.classList.toggle("on"); })); } };
   };
 
+  // Заваривание: не голый таймер, а карта параметров конкретного сорта.
+  // Гость приходит сюда из карточки чая (#/brew?tea=<id>) и видит температуру,
+  // время для фирменного стакана и режим проливов. Таймер — дополнение, а не
+  // содержание экрана.
   Views.brew = function () {
-    const teas = window.TEAS.filter((t) => t.cat !== "mate");
-    const html = `<header class="brew-hero brew-chapter-hero"><div class="brew-hero-copy"><span class="story-kicker"><i></i> интерактивная глава</span><h1>Заварите<br><em>не спеша.</em></h1><p>Не просто таймер. Выберите лист, прочитайте его историю и пройдите пролив как короткий спокойный маршрут.</p><ol class="brew-route"><li><b>01</b><span>Лист<small>выбрать главу</small></span></li><li><b>02</b><span>Вода<small>услышать температуру</small></span></li><li><b>03</b><span>Время<small>остаться рядом</small></span></li></ol></div><figure class="brew-brand-art"><img src="img/brand/mark-color.png" alt="Фирменный знак — рука с пиалой"><figcaption><span>茶 · CHAPTER 02</span><b>Вода уже<br>слушает лист.</b></figcaption></figure></header><section class="wrap brew-atelier"><header class="brew-atelier-head"><div><span class="section-tag">Личный ритуал</span><h2>Откройте следующую главу.</h2></div><p>Параметры берутся из чайной карты. Таймер можно поставить на паузу, повторить пролив и сохранить выбранный сорт в разделе «Мой чай».</p></header><div class="brew-workspace"><aside class="brew-picker"><span class="brew-folio">01 · ЛИСТ</span><label>Какой чай сегодня?<select id="brewTea">${teas.map((t) => `<option value="${t.id}">${t.name}</option>`).join("")}</select></label><p>Быстрые главы</p><div class="brew-quick">${teas.slice(0, 8).map((t,i) => `<button data-brew-pick="${t.id}"><span>${String(i+1).padStart(2,"0")}</span>${t.name.split(" ").slice(0, 3).join(" ")}</button>`).join("")}</div></aside><article class="brew-story" id="brewStory"></article><article class="brew-timer" id="brewTimer"></article></div></section>`;
+    const teas = window.TEAS.slice();
+    const requested = new URLSearchParams((location.hash.split("?")[1] || "")).get("tea");
+    const initial = teas.find((tea) => tea.id === requested) || teas[0];
+    const wisdom = Wisdom.ofTheDay("brewing");
+    const html = `<header class="brew-hero brew-chapter-hero"><div class="brew-hero-copy"><span class="story-kicker"><i></i> карта заваривания</span><h1>Как заварить<br><em>этот чай.</em></h1><p>Температура воды, время в фирменном стакане и режим проливов — для каждого сорта отдельно. Ниже можно включить таймер и остаться рядом с чашкой.</p><ol class="brew-route"><li><b>01</b><span>Лист<small>выбрать сорт</small></span></li><li><b>02</b><span>Вода<small>температура и навеска</small></span></li><li><b>03</b><span>Время<small>стакан или проливы</small></span></li></ol></div><figure class="brew-brand-art"><img src="img/brand/mark-color.png" alt="Фирменный знак — рука с пиалой"><figcaption><span>茶 · РУКА С ПИАЛОЙ</span><b>Вода уже<br>слушает лист.</b></figcaption></figure></header>
+      <section class="wrap brew-atelier">
+        <header class="brew-atelier-head"><div><span class="section-tag">Рекомендации чайной</span><h2>Параметры берём из карты сорта.</h2></div><p>Те же значения показываются при настройке позиции в меню. Здесь к ним добавляется таймер и объяснение, чем стакан отличается от проливов.</p></header>
+        <div class="brew-workspace">
+          <aside class="brew-picker">
+            <span class="brew-folio">01 · ЛИСТ</span>
+            <label for="brewTea">Какой чай завариваем?<select id="brewTea">${teas.map((tea) => `<option value="${tea.id}" ${tea.id === initial.id ? "selected" : ""}>${tea.name}</option>`).join("")}</select></label>
+            <p>Быстрый выбор</p>
+            <div class="brew-quick">${teas.slice(0, 8).map((tea, index) => `<button data-brew-pick="${tea.id}"><span>${String(index + 1).padStart(2, "0")}</span>${tea.name.split(" ").slice(0, 3).join(" ")}</button>`).join("")}</div>
+            ${wisdom ? `<div class="brew-wisdom"><img src="img/brand/mark-bowl-terra.svg" alt=""><b>${wisdom.text}</b><small>${wisdom.tip}</small></div>` : ""}
+          </aside>
+          <article class="brew-story" id="brewStory"></article>
+          <article class="brew-timer" id="brewTimer"></article>
+        </div>
+      </section>`;
     return { html, mount(root) {
-      let timer = null, left = 0, selected = teas[0], pour=1; const select = root.querySelector("#brewTea"), story = root.querySelector("#brewStory"), timerBox = root.querySelector("#brewTimer");
-      const secondsFrom = (value) => { const found = String(value || "").match(/(\d+)/); return Math.min(240, Math.max(10, found ? Number(found[1]) : 30)); };
-      const render = () => { selected = UI.teaById(select.value) || teas[0]; const brew = selected.brew || {}; left = secondsFrom(brew.time);pour=1;story.innerHTML = `<div class="brew-story-meta"><span>02 · ИСТОРИЯ ЛИСТА</span><small>${selected.cat||"чайная глава"}</small></div><h2>${selected.name}</h2><p>${selected.story}</p><div class="taste-notes">${selected.notes.map((n) => `<span>${n}</span>`).join("")}</div><dl><div><dt>Вода</dt><dd>${brew.temp || "по характеру листа"}</dd></div><div><dt>Навеска</dt><dd>${brew.amount || "5–7 г"}</dd></div><div><dt>Ритм</dt><dd>${brew.time || "по проливам"}</dd></div></dl><blockquote>«Сначала послушайте воду. Потом — себя.»</blockquote>`; root.querySelectorAll("[data-brew-pick]").forEach((button)=>button.classList.toggle("active",button.dataset.brewPick===selected.id)); drawTimer(); Store.discoverTea(selected.id); };
-      const drawTimer = () => { const total=secondsFrom(selected.brew&&selected.brew.time),progress=Math.max(0,Math.min(1,left/total));timerBox.innerHTML = `<div class="brew-story-meta"><span>03 · ВРЕМЯ</span><small>пролив ${String(pour).padStart(2,"0")}</small></div><div class="timer-dial"><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52"></circle><circle class="timer-progress" pathLength="100" cx="60" cy="60" r="52" style="stroke-dashoffset:${100-progress*100}"></circle></svg><img src="img/brand/mark-bowl-terra.svg" alt=""><b>${left}</b><small>секунд</small></div><h3>${left ? "Вода уже слушает лист" : "Пролив готов"}</h3><p>${left ? "Запустите время и останьтесь рядом с чашкой." : "Разлейте чай полностью. Следующая глава будет мягче."}</p><div class="timer-actions"><button class="btn primary" id="timerStart">${timer ? "Пауза" : left ? "Начать пролив" : "Следующий пролив"}</button><button class="btn ghost" id="timerSave">Сохранить ритуал</button></div>`; root.querySelector("#timerStart").onclick = () => { if (!left){left=total;pour+=1;} if (timer) { clearInterval(timer); timer = null; drawTimer(); return; } timer = setInterval(() => { left -= 1; if (left <= 0) { clearInterval(timer); timer = null; left = 0; } drawTimer(); }, 1000); drawTimer(); }; root.querySelector("#timerSave").onclick = () => { Store.logPick(selected.id, null); UI.toast("Ритуал сохранён в разделе «Мой чай»"); }; };
-      select.onchange = render; root.querySelectorAll("[data-brew-pick]").forEach((b) => b.onclick = () => { select.value = b.dataset.brewPick; render(); }); render();
+      let timer = null, left = 0, selected = initial, pour = 1, mode = "pours";
+      const select = root.querySelector("#brewTea"), story = root.querySelector("#brewStory"), timerBox = root.querySelector("#brewTimer");
+      App.onLeave?.(() => { if (timer) { clearInterval(timer); timer = null; } });
+
+      const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+      // Длительность текущего шага: для стакана — одно время, для проливов —
+      // растущее по номеру пролива.
+      const stepSeconds = () => {
+        const guide = Brewing.guide(selected);
+        if (mode === "cup") return guide.cup.seconds;
+        const plan = guide.pours;
+        return (plan[Math.min(pour - 1, plan.length - 1)] || plan[0]).seconds;
+      };
+
+      const render = () => {
+        stop();
+        selected = UI.teaById(select.value) || teas[0];
+        const guide = Brewing.guide(selected);
+        pour = 1;
+        left = stepSeconds();
+        story.innerHTML = `<div class="brew-story-meta"><span>02 · ВОДА И НАВЕСКА</span><small>${(TEA_CATEGORIES.find((entry) => entry.key === selected.cat)?.label) || "чайная глава"}</small></div>
+          <h2>${selected.name}</h2>
+          <p>${selected.story}</p>
+          <div class="taste-notes">${selected.notes.map((note) => `<span>${note}</span>`).join("")}</div>
+          <dl class="brew-params">
+            <div><dt>Температура воды</dt><dd>${guide.temperature.label}</dd></div>
+            <div><dt>Навеска по карте</dt><dd>${guide.referenceLabel}</dd></div>
+            <div><dt>Фирменный стакан 0,5 л</dt><dd>${guide.cup.grams ? `${guide.cup.grams} г · ${guide.cup.label}` : guide.cup.label}</dd></div>
+            <div><dt>Проливы</dt><dd>${guide.freeform ? "доливать многократно, без строгого времени" : guide.pours.slice(0, 4).map((entry) => entry.label).join(" → ")}</dd></div>
+          </dl>
+          ${(() => {
+            // Советы чайных мастеров об этом сорте: пишет мастер в редакции,
+            // публикацию подтверждает управляющая.
+            const advice = window.Content?.advice?.(selected.id) || [];
+            if (!advice.length) return "";
+            return `<section class="brew-advice"><span class="section-tag">Советы чайных мастеров</span>${advice.slice(0, 3).map((item) => `<article><h3>${item.title}</h3><p>${item.excerpt || String(item.body || "").slice(0, 240)}</p><cite>${item.authorName}</cite></article>`).join("")}</section>`;
+          })()}
+          <div class="brew-actions"><button class="btn primary" data-order-tea>Заказать этот чай ↘</button><button class="btn ghost" data-fav-tea>${Store.isFavorite(selected.id) ? "В избранном" : "В избранное"}</button></div>`;
+        root.querySelectorAll("[data-brew-pick]").forEach((button) => button.classList.toggle("active", button.dataset.brewPick === selected.id));
+        story.querySelector("[data-order-tea]").onclick = () => Commerce.openTea(selected.id);
+        story.querySelector("[data-fav-tea]").onclick = (event) => {
+          Store.toggleFavorite(selected.id);
+          event.currentTarget.textContent = Store.isFavorite(selected.id) ? "В избранном" : "В избранное";
+          UI.toast(Store.isFavorite(selected.id) ? "Сорт добавлен в «Мой чай»" : "Сорт убран из избранного");
+        };
+        drawTimer();
+        Store.discoverTea(selected.id);
+      };
+
+      const drawTimer = () => {
+        const guide = Brewing.guide(selected);
+        const total = Math.max(1, stepSeconds());
+        const progress = Math.max(0, Math.min(1, left / total));
+        const stepLabel = mode === "cup" ? "стакан 0,5 л" : `пролив ${String(pour).padStart(2, "0")}`;
+        timerBox.innerHTML = `<div class="brew-story-meta"><span>03 · ВРЕМЯ</span><small>${stepLabel}</small></div>
+          <div class="brew-mode" role="group" aria-label="Способ заваривания"><button type="button" data-mode="pours" class="${mode === "pours" ? "active" : ""}">Проливы</button><button type="button" data-mode="cup" class="${mode === "cup" ? "active" : ""}">Стакан 0,5 л</button></div>
+          <div class="timer-dial"><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52"></circle><circle class="timer-progress" pathLength="100" cx="60" cy="60" r="52" style="stroke-dashoffset:${100 - progress * 100}"></circle></svg><img src="img/brand/mark-bowl-terra.svg" alt=""><b role="timer" aria-live="polite" aria-label="Осталось секунд">${left}</b><small>секунд</small></div>
+          <h3>${left ? (mode === "cup" ? "Стакан заваривается" : "Вода уже слушает лист") : "Готово"}</h3>
+          <p>${left ? (mode === "cup" ? `Настой в объёме 0,5 л держим ${guide.cup.label}.` : "Запустите время и останьтесь рядом с чашкой.") : (mode === "cup" ? "Достаньте лист, чтобы вкус не стал горьким." : "Разлейте чай полностью. Следующий пролив будет длиннее.")}</p>
+          <div class="timer-actions"><button class="btn primary" id="timerStart">${timer ? "Пауза" : left ? "Запустить" : mode === "cup" ? "Повторить" : "Следующий пролив"}</button><button class="btn ghost" id="timerReset">Сброс</button></div>
+          ${guide.freeform ? `<p class="brew-freeform">У этого чая нет строгого времени: доливайте воду по вкусу, ориентируясь на насыщенность настоя.</p>` : ""}`;
+        timerBox.querySelectorAll("[data-mode]").forEach((button) => button.onclick = () => {
+          mode = button.dataset.mode; pour = 1; stop(); left = stepSeconds(); drawTimer();
+        });
+        timerBox.querySelector("#timerStart").onclick = () => {
+          if (!left) { if (mode === "pours") pour += 1; left = stepSeconds(); }
+          if (timer) { stop(); drawTimer(); return; }
+          timer = setInterval(() => {
+            left -= 1;
+            if (left <= 0) { stop(); left = 0; UI.toast(mode === "cup" ? "Стакан готов" : `Пролив ${pour} готов`); }
+            drawTimer();
+          }, 1000);
+          drawTimer();
+        };
+        timerBox.querySelector("#timerReset").onclick = () => { stop(); pour = 1; left = stepSeconds(); drawTimer(); };
+      };
+
+      select.onchange = render;
+      root.querySelectorAll("[data-brew-pick]").forEach((button) => button.onclick = () => { select.value = button.dataset.brewPick; render(); });
+      render();
     } };
   };
 
@@ -115,7 +211,103 @@
         if(tab==="1c"){panel.innerHTML=`<div class="work-list onec-panel"><span class="section-tag">Интеграция без ручного двойного ввода</span><h2>1С · контур обмена</h2><p class="muted">Заказы и изменения склада уже ставятся в надёжную очередь. Для запуска нужен технический доступ к тестовой публикации 1С.</p><div class="onec-status" id="onecStatus">Проверяем готовность контура…</div><ol><li>Название конфигурации и точная версия платформы.</li><li>Адрес тестовой публикации по HTTPS и отдельный сервисный пользователь.</li><li>Согласованные справочники: номенклатура, склады, цены, контрагенты и заказы.</li><li>Описание расширения или HTTP-сервиса <code>/hs/chay/exchange</code>.</li><li>Тестовая база, ответственный 1С-разработчик и окно приёмки.</li></ol><button id="onecProbe">Проверить соединение</button></div>`;const paint=async(probe=false)=>{const box=panel.querySelector("#onecStatus");try{const result=await ApiClient.integrations.oneCStatus(probe),x=result.integration,q=x.queue?.counts||{};box.innerHTML=`<b>${x.configured?(x.probe?.ok?"1С отвечает":"Доступ настроен"):"Ожидается доступ от 1С"}</b><span>В очереди: ${q.pending||0} · передано: ${q.sent||0} · ошибок: ${q.failed||0}</span>${x.probe?.error?`<small>${x.probe.error}</small>`:""}`;}catch(error){box.textContent=error.message;}};paint();panel.querySelector("#onecProbe").onclick=()=>paint(true);}
         bind();
       };
-      const bind = () => { panel.querySelectorAll("[data-assign-branch]").forEach((select)=>select.onchange=async()=>{select.disabled=true;const result=await Auth.setUserBranch(select.dataset.assignBranch,select.value);UI.toast(result.ok?"Рабочий город сотрудника обновлён":result.error);select.disabled=false;if(result.ok){await Branches.loadSummaries();render();}}); const msg=panel.querySelector("#messageForm"); if(msg) msg.onsubmit=e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget).entries());if(String(data.audience).startsWith("client:")){data.targetId=data.audience.slice(7);data.audience="client";}Operations.sendMessage(data);render();}; panel.querySelectorAll("[data-team-stock-request]").forEach((button)=>button.onclick=()=>{const item=Inventory.byId(button.dataset.teamStockRequest);Operations.createRequest({type:"stock",title:`Пополнить: ${item.name}`,details:`Остаток ${item.stock} ${item.unit}, минимум ${item.par} ${item.unit}.`,urgency:"high"});UI.toast("Заявка на пополнение передана управляющей");button.disabled=true;});panel.querySelector("[data-open-admin-stock]")?.addEventListener("click",()=>UI.navigate("#/admin?tab=stock")); panel.querySelectorAll("[data-loyalty]").forEach(button=>button.onclick=async()=>{const[id,delta]=button.dataset.loyalty.split("|");button.disabled=true;const note=prompt("Причина корректировки карты","Корректировка чайным мастером");if(note===null){button.disabled=false;return;}try{await ApiClient.loyalty.adjust(id,Number(delta),note);UI.toast("Карта лояльности обновлена");}catch(error){UI.toast(error.message);}render();}); const req=panel.querySelector("#requestForm");if(req)req.onsubmit=e=>{e.preventDefault();Operations.createRequest(Object.fromEntries(new FormData(e.currentTarget).entries()));render();}; const rep=panel.querySelector("#reportForm");if(rep)rep.onsubmit=e=>{e.preventDefault();const fd=new FormData(e.currentTarget);Operations.createReport({shift:fd.get("shift"),note:fd.get("note"),checks:{hall:fd.has("hall"),cash:fd.has("cash"),stock:fd.has("stock"),handoff:fd.has("handoff")}});render();}; panel.querySelectorAll("[data-request-done]").forEach(b=>b.onclick=()=>{Operations.setRequestStatus(b.dataset.requestDone,"done");render();});panel.querySelectorAll("[data-cert-next]").forEach(b=>b.onclick=()=>{const [id,status]=b.dataset.certNext.split("|");const note=panel.querySelector(`[data-cert-note="${id}"]`)?.value||"";Operations.setCertificateStatus(id,status,note);render();});panel.querySelectorAll("[data-cert-cancel]").forEach(b=>b.onclick=()=>{if(confirm("Отменить заявку на сертификат?")){Operations.setCertificateStatus(b.dataset.certCancel,"cancelled");render();}}); };
+      // Рабочие действия команды подтверждаются сервером, а не только локально.
+      // Раньше отклонённый переход статуса сертификата всё равно выглядел
+      // выполненным, потому что UI перерисовывался сразу после записи в DB.
+      const cloud = () => !!(window.ApiClient && ApiClient.isReady());
+      const confirmSync = async (collection, record, okText) => {
+        if (!record) { UI.toast("Действие недоступно для вашей роли"); return false; }
+        if (!cloud()) { UI.toast(okText); return true; }
+        const synced = await ApiClient.whenSynced(collection, record.id);
+        UI.toast(synced ? okText : "Сервер не подтвердил изменение. Проверьте связь и повторите.");
+        return synced;
+      };
+      const bind = () => {
+        panel.querySelectorAll("[data-assign-branch]").forEach((select) => select.onchange = async () => {
+          select.disabled = true;
+          const result = await Auth.setUserBranch(select.dataset.assignBranch, select.value);
+          UI.toast(result.ok ? "Рабочий город сотрудника обновлён" : result.error);
+          select.disabled = false;
+          if (result.ok) { await Branches.loadSummaries(); render(); }
+        });
+
+        const msg = panel.querySelector("#messageForm");
+        if (msg) msg.onsubmit = async (e) => {
+          e.preventDefault();
+          const form = e.currentTarget, button = form.querySelector("button");
+          button.disabled = true;
+          try {
+            const data = Object.fromEntries(new FormData(form).entries());
+            if (String(data.audience).startsWith("client:")) { data.targetId = data.audience.slice(7); data.audience = "client"; }
+            await confirmSync("messages", Operations.sendMessage(data), "Сообщение отправлено");
+          } finally { button.disabled = false; render(); }
+        };
+
+        panel.querySelectorAll("[data-team-stock-request]").forEach((button) => button.onclick = async () => {
+          const item = Inventory.byId(button.dataset.teamStockRequest);
+          // Позиция могла исчезнуть после синхронизации — без проверки здесь
+          // обработчик падал с TypeError и кнопка молча не работала.
+          if (!item) { UI.toast("Позиция склада больше не доступна"); render(); return; }
+          button.disabled = true;
+          await confirmSync("staff_requests", Operations.createRequest({ type: "stock", title: `Пополнить: ${item.name}`, details: `Остаток ${item.stock} ${item.unit}, минимум ${item.par} ${item.unit}.`, urgency: "high" }), "Заявка на пополнение передана управляющей");
+        });
+
+        panel.querySelector("[data-open-admin-stock]")?.addEventListener("click", () => UI.navigate("#/admin?tab=stock"));
+
+        panel.querySelectorAll("[data-loyalty]").forEach((button) => button.onclick = async () => {
+          const [id, delta] = button.dataset.loyalty.split("|");
+          button.disabled = true;
+          const note = prompt("Причина корректировки карты", "Корректировка чайным мастером");
+          if (note === null) { button.disabled = false; return; }
+          try {
+            const result = await ApiClient.loyalty.adjust(id, Number(delta), note);
+            const stamps = result?.loyalty?.stamps;
+            UI.toast(stamps === undefined ? "Карта лояльности обновлена" : `Карта обновлена · отметок: ${stamps}`);
+          } catch (error) { UI.toast(error.message); }
+          render();
+        });
+
+        const req = panel.querySelector("#requestForm");
+        if (req) req.onsubmit = async (e) => {
+          e.preventDefault();
+          const form = e.currentTarget, button = form.querySelector("button");
+          button.disabled = true;
+          try { await confirmSync("staff_requests", Operations.createRequest(Object.fromEntries(new FormData(form).entries())), "Заявка передана дальше"); }
+          finally { button.disabled = false; render(); }
+        };
+
+        const rep = panel.querySelector("#reportForm");
+        if (rep) rep.onsubmit = async (e) => {
+          e.preventDefault();
+          const form = e.currentTarget, button = form.querySelector("button");
+          button.disabled = true;
+          try {
+            const fd = new FormData(form);
+            await confirmSync("shift_reports", Operations.createReport({ shift: fd.get("shift"), note: fd.get("note"), checks: { hall: fd.has("hall"), cash: fd.has("cash"), stock: fd.has("stock"), handoff: fd.has("handoff") } }), "Отчёт смены сдан");
+          } finally { button.disabled = false; render(); }
+        };
+
+        panel.querySelectorAll("[data-request-done]").forEach((b) => b.onclick = async () => {
+          b.disabled = true;
+          await confirmSync("staff_requests", Operations.setRequestStatus(b.dataset.requestDone, "done"), "Заявка закрыта");
+          render();
+        });
+
+        panel.querySelectorAll("[data-cert-next]").forEach((b) => b.onclick = async () => {
+          const [id, status] = b.dataset.certNext.split("|");
+          const note = panel.querySelector(`[data-cert-note="${id}"]`)?.value || "";
+          b.disabled = true;
+          await confirmSync("certificates", Operations.setCertificateStatus(id, status, note), "Статус сертификата обновлён");
+          render();
+        });
+
+        panel.querySelectorAll("[data-cert-cancel]").forEach((b) => b.onclick = async () => {
+          if (!confirm("Отменить заявку на сертификат?")) return;
+          b.disabled = true;
+          await confirmSync("certificates", Operations.setCertificateStatus(b.dataset.certCancel, "cancelled"), "Заявка отменена");
+          render();
+        });
+      };
       root.querySelectorAll("[data-team-tab]").forEach(b=>b.onclick=()=>{tab=b.dataset.teamTab;root.querySelectorAll("[data-team-tab]").forEach(x=>x.classList.toggle("active",x===b));render();}); render();
     } };
   };

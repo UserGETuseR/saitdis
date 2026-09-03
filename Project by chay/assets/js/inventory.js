@@ -23,24 +23,23 @@ window.Inventory = (function () {
     return round(raw);
   }
 
+  // Стартовый справочник — только для локальной презентации без сервера.
+  // Раньше эта функция вызывалась и в облаке для сотрудника: случайные остатки
+  // уезжали в боевую базу и перезаписывали настоящий справочник.
+  // Остатки заводятся нулями: реальное количество вводится поступлением или
+  // инвентаризацией, чтобы у каждой цифры был документ.
   function seedIfEmpty() {
+    if (!(typeof window.CHA_DEMO_ALLOWED === "function" && window.CHA_DEMO_ALLOWED())) return;
+    if (window.ApiClient?.isReady?.()) return;
     const activeBranch=branchId();
     const existing=col.all();
     if(existing.some((record)=>(record.branchId||"sochi")===activeBranch))return;
     const records = [];
     (window.TEAS || []).forEach((t) => {
-      records.push({
-        id: `${activeBranch}_${t.id}`,branchId:activeBranch,catalogId:t.id, kind: "tea", name: t.name, unit: "г",
-        stock: 250 + Math.round(Math.random() * 6) * 50, // 250–550 г стартово
-        par: 150, cat: t.cat,
-      });
+      records.push({ id: `${activeBranch}_${t.id}`,branchId:activeBranch,catalogId:t.id, kind: "tea", name: t.name, unit: "г", stock: 0, par: 150, cat: t.cat });
     });
     (window.MUSHROOMS || []).forEach((m) => {
-      records.push({
-        id: `${activeBranch}_${m.id}`,branchId:activeBranch,catalogId:m.id, kind: "mushroom", name: m.name, unit: "порц.",
-        stock: 30 + Math.round(Math.random() * 10) * 5, // 30–80 порций
-        par: 25,
-      });
+      records.push({ id: `${activeBranch}_${m.id}`,branchId:activeBranch,catalogId:m.id, kind: "mushroom", name: m.name, unit: "порц.", stock: 0, par: 25 });
     });
     col.replaceAll([...existing.map((record)=>({...record,branchId:record.branchId||"sochi",catalogId:record.catalogId||record.id})),...records.map((r) => Object.assign({ createdAt: Date.now() }, r))]);
   }
@@ -64,6 +63,9 @@ window.Inventory = (function () {
       const item=this.byId(data.inventoryId); if(!item)throw new Error("Позиция склада не найдена");
       const type=TYPE[data.type]?data.type:"correction", before=Number(item.stock)||0;
       const delta=movementDelta(type,data.quantity,before), after=round(before+delta);
+      // Инвентаризация «всё сошлось» — нормальный результат, а не ошибка ввода:
+      // движение не создаётся, потому что остаток не изменился.
+      if(type==="stocktake"&&delta===0)return {inventory:this.byId(item.catalogId||item.id),movement:null,unchanged:true};
       if(!Number.isFinite(delta)||delta===0)throw new Error("Укажите количество, которое меняет остаток");
       if(after<0)throw new Error("Нельзя списать больше текущего остатка");
       const payload={id:DB.uid("mov"),inventoryId:item.id,branchId:item.branchId||branchId(),catalogId:item.catalogId,type,quantity:type==="stocktake"?Number(data.quantity):delta,reason:String(data.reason||"").trim(),documentRef:String(data.documentRef||"").trim(),actorName:Auth.current()?.name||"Система",createdAt:Date.now()};
@@ -73,16 +75,32 @@ window.Inventory = (function () {
       return {inventory:updated,movement};
     },
 
-    // списание при заказе (чай — навеска порции ~7 г, гриб — 1 порция)
-    consumeForItem(item) {
+    // Списание по позиции заказа. В облаке остатки ведёт сервер: он списывает
+    // их одной транзакцией при переводе заказа в «Готов» (repository.js ·
+    // applyOrderStock). Здесь остаётся только локальный контур презентации.
+    // Раньше с любого заказа списывалось ровно 7 г независимо от навески.
+    consumeForItem(item, orderId) {
       if (window.Auth?.isCloud?.()) return;
+      const write = (rec, amount, unitLabel) => {
+        if (!rec || !(amount > 0)) return;
+        const before = Number(rec.stock) || 0;
+        const taken = Math.min(before, round(amount));
+        if (taken <= 0) return;
+        const after = round(before - taken);
+        col.update(rec.id, { stock: after });
+        movements.insert({ id: DB.uid("mov"), inventoryId: rec.id, branchId: rec.branchId || branchId(), catalogId: rec.catalogId, type: "sale", quantity: -taken, stockBefore: before, stockAfter: after, reason: `Продажа по заказу ${orderId || "—"}${unitLabel ? ` · ${taken} ${unitLabel}` : ""}`, documentRef: orderId || "", actorName: Auth.current()?.name || "Система", createdAt: Date.now() });
+      };
+      const quantity = Math.max(1, Number(item.quantity) || 1);
       if (item.teaId) {
-        const rec = this.byId(item.teaId);
-        if (rec) { const before=Number(rec.stock)||0,after=Math.max(0,before-7);col.update(rec.id,{stock:after});movements.insert({inventoryId:rec.id,branchId:rec.branchId||branchId(),catalogId:rec.catalogId,type:"sale",quantity:after-before,stockBefore:before,stockAfter:after,reason:"Автоматическое списание по заказу",actorName:Auth.current()?.name||"Система"}); }
+        // Навеска чая приходит в граммах: quantity при unit="g" либо grams.
+        const grams = Number(item.grams) || (item.unit === "g" ? quantity : 0);
+        write(this.byId(item.teaId), grams > 0 ? grams : 7, "г");
       }
-      if (item.mushroomId) {
-        const rec = this.byId(item.mushroomId);
-        if (rec) { const before=Number(rec.stock)||0,after=Math.max(0,before-1);col.update(rec.id,{stock:after});movements.insert({inventoryId:rec.id,branchId:rec.branchId||branchId(),catalogId:rec.catalogId,type:"sale",quantity:after-before,stockBefore:before,stockAfter:after,reason:"Автоматическое списание по заказу",actorName:Auth.current()?.name||"Система"}); }
+      if (item.mushroomId) write(this.byId(item.mushroomId), 1, "порц.");
+      if (!item.teaId && !item.mushroomId && item.sku) {
+        const sku = String(item.sku).trim().toLowerCase();
+        const short = sku.includes("-") ? sku.slice(sku.indexOf("-") + 1) : sku;
+        write(this.byId(short) || this.byId(sku), quantity, item.unit || "шт");
       }
     },
 

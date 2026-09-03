@@ -9,6 +9,29 @@ window.ApiClient = (function () {
   const pending = new Map();
   const STAFF_COLLECTIONS = ["messages", "staff_requests", "shift_reports", "service_guides", "inventory", "inventory_movements", "publications", "orders", "shifts", "certificates", "notifications"];
   const CLIENT_COLLECTIONS = ["orders", "certificates", "messages", "notifications"];
+  const pendingRetry = [];
+  // Журнал движений склада создаётся только через POST /inventory/movements,
+  // а уведомления сервер выдаёт сам. Попытка записать их через /records
+  // возвращала отказ и уводила индикатор синхронизации в «degraded».
+  const READ_ONLY_COLLECTIONS = new Set(["inventory_movements", "notifications"]);
+
+  // Реестр записей, приём которых сервер подтвердил. Он позволяет отличить
+  // «сервер удалил запись» от «запись ещё не доехала до сервера».
+  const SYNCED_KEY = "cha_synced_v1";
+  function readSynced() {
+    try { return new Set(JSON.parse(localStorage.getItem(SYNCED_KEY)) || []); } catch (_) { return new Set(); }
+  }
+  function writeSynced(set) {
+    try { localStorage.setItem(SYNCED_KEY, JSON.stringify([...set].slice(-4000))); } catch (_) {}
+  }
+  function isSynced(name, id) { return readSynced().has(`${name}:${id}`); }
+  function rememberSynced(name, id) { const set = readSynced(); set.add(`${name}:${id}`); writeSynced(set); }
+  function forgetSynced(name, ids) {
+    if (!ids || !ids.length) return;
+    const set = readSynced();
+    ids.forEach((id) => set.delete(`${name}:${id}`));
+    writeSynced(set);
+  }
 
   function emit(extra) { listeners.forEach((fn) => { try { fn({ state, ready, ...extra }); } catch (_) {} }); }
   function setState(next, extra) { state = next; emit(extra); }
@@ -80,15 +103,41 @@ window.ApiClient = (function () {
   };
 
   async function list(name) { return (await request(api(`/records/${name}`))).items || []; }
+
+  // Публичные маршруты могут выдать свой идентификатор и всегда ставят статус
+  // «новый». Без переноса id локальная запись осиротеет при следующей гидратации.
+  function adoptServerId(name, record, result) {
+    const serverId = result && result.id;
+    if (!serverId) return;
+    if (serverId !== record.id) {
+      hydrating = true;
+      try {
+        DB.collection(name).remove(record.id);
+        DB.collection(name).upsert({ ...record, id: serverId, status: result.status || record.status });
+      } finally { hydrating = false; }
+      rememberSynced(name, serverId);
+    } else if (result.status && result.status !== record.status) {
+      hydrating = true;
+      try { DB.collection(name).update(record.id, { status: result.status }); } finally { hydrating = false; }
+    }
+  }
   function pushRecord(name, record) {
     if (!ready || hydrating || !record) return Promise.resolve(false);
     const key = `${name}:${record.id}`;
     const previous = pending.get(key) || Promise.resolve();
     const task = previous.catch(() => false).then(async () => { try {
-      if (name === "notifications") await notifications.read(record.id);
-      else if (name === "certificates" && !window.Auth?.isStaff?.()) await request(api("/public/certificates"), { method:"POST", body:{...record,branchId:record.branchId||window.Branches?.current?.().id||"sochi"} });
-      else if (name === "orders" && !window.Auth?.isStaff?.()) await request(api("/public/orders"), { method:"POST", body:{ ...record, branchId:record.branchId||window.Branches?.current?.().id||"sochi", createdAt:record.ts || record.createdAt } });
+      if (name === "inventory_movements") return true; // журнал ведёт сервер
+      else if (name === "notifications") await notifications.read(record.id);
+      else if (name === "certificates" && !window.Auth?.isStaff?.()) {
+        const result = await request(api("/public/certificates"), { method:"POST", body:{...record,branchId:record.branchId||window.Branches?.current?.().id||"sochi"} });
+        adoptServerId(name, record, result);
+      }
+      else if (name === "orders" && !window.Auth?.isStaff?.()) {
+        const result = await request(api("/public/orders"), { method:"POST", body:{ ...record, branchId:record.branchId||window.Branches?.current?.().id||"sochi", createdAt:record.ts || record.createdAt } });
+        adoptServerId(name, record, result);
+      }
       else await request(api(`/records/${name}`), { method:"PUT", body:record });
+      rememberSynced(name, record.id);
       setState("cloud", { synced:name }); return true;
     } catch (error) { setState("degraded", { error:error.message, collection:name }); return false; } });
     pending.set(key, task);
@@ -98,7 +147,8 @@ window.ApiClient = (function () {
 
   async function removeRecord(name, id) {
     if (!ready || hydrating) return false;
-    try { await request(api(`/records/${name}/${encodeURIComponent(id)}`), { method:"DELETE" }); return true; }
+    if (READ_ONLY_COLLECTIONS.has(name)) return false;
+    try { await request(api(`/records/${name}/${encodeURIComponent(id)}`), { method:"DELETE" }); forgetSynced(name, [id]); return true; }
     catch (error) { setState("degraded", { error:error.message, collection:name }); return false; }
   }
 
@@ -110,16 +160,23 @@ window.ApiClient = (function () {
       for (const name of collections) {
         const local = DB.collection(name).all();
         const remote = await list(name);
-        // First production launch: allow an authenticated employee to migrate
-        // a locally seeded catalogue, but never let a client upload demo data.
-        if (!remote.length && local.length && ["master", "admin", "owner"].includes(user.role)) {
-          hydrating = false;
-          for (const record of local) await pushRecord(name, record);
-          hydrating = true;
-        } else DB.collection(name).replaceAll(remote);
+        const remoteIds = new Set(remote.map((record) => record && record.id));
+        // Записи, которые сервер уже принял, при отсутствии в ответе считаются
+        // удалёнными и уходят. Всё, что отправить не удалось, остаётся на
+        // устройстве: раньше replaceAll стирал такие записи молча.
+        const unsent = local.filter((record) => record && record.id && !remoteIds.has(record.id) && !isSynced(name, record.id));
+        DB.collection(name).replaceAll([...remote, ...unsent]);
+        forgetSynced(name, local.filter((record) => record && record.id && !remoteIds.has(record.id)).map((record) => record.id));
+        if (unsent.length) pendingRetry.push(...unsent.map((record) => ({ name, record })));
       }
       setState("cloud", { hydrated:true });
     } finally { hydrating = false; }
+    // Повторная отправка выполняется уже вне окна гидратации, иначе pushRecord
+    // отбрасывает записи проверкой hydrating.
+    if (pendingRetry.length) {
+      const queue = pendingRetry.splice(0, pendingRetry.length);
+      for (const item of queue) await pushRecord(item.name, item.record);
+    }
   }
 
   return {
@@ -127,7 +184,9 @@ window.ApiClient = (function () {
     isReady: () => ready,
     isHydrating: () => hydrating,
     status: () => state,
-    whenSynced(name,id) { return pending.get(`${name}:${id}`) || Promise.resolve(!ready ? false : true); },
+    // Раньше отсутствие задачи в очереди трактовалось как успех. Теперь ответ
+    // «да» даётся только по факту подтверждения сервером.
+    whenSynced(name,id) { return pending.get(`${name}:${id}`) || Promise.resolve(ready ? isSynced(name,id) : false); },
     subscribe(fn) { listeners.push(fn); },
   };
 })();

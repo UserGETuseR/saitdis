@@ -1,17 +1,24 @@
 // ===== UI-хелперы и переиспользуемые компоненты =====
 
 window.UI = (function () {
-  const rub = (n) => n.toLocaleString("ru-RU") + " ₽";
+  // Позиция без цены не должна ронять весь шаблон экрана.
+  const rub = (n) => (Number.isFinite(Number(n)) ? Number(n) : 0).toLocaleString("ru-RU") + " ₽";
 
   const teaById = (id) => window.TEAS.find((t) => t.id === id);
   const mushroomById = (id) => window.MUSHROOMS.find((m) => m.id === id);
 
+  // Единственный канал обратной связи приложения: подтверждения заказа,
+  // ошибки синхронизации и отказы по правам. Регион помечен как live,
+  // иначе ни одно из этих сообщений не доходит до скринридера.
   function toast(msg) {
     let t = document.getElementById("toast");
     if (!t) {
       t = document.createElement("div");
       t.id = "toast";
       t.className = "toast";
+      t.setAttribute("role", "status");
+      t.setAttribute("aria-live", "polite");
+      t.setAttribute("aria-atomic", "true");
       document.body.appendChild(t);
     }
     t.textContent = msg;
@@ -216,6 +223,20 @@ window.UI = (function () {
         </g>
       </svg>`;
     }
+    if (key === "amanita") {
+      // Красный мухомор — отдельная глава грибной карты (data.elixirs.js · «Тишина»).
+      // Без этой ветки глава получала безликую иконку-заглушку.
+      const dots = [[36, 30, 4.6], [52, 26, 5.4], [44, 40, 3.6], [61, 36, 4], [28, 40, 3.2], [54, 44, 3]];
+      return `
+      <svg class="ex-art" viewBox="0 0 96 96" aria-hidden="true">
+        <defs><radialGradient id="am${sfx}" cx="40%" cy="26%" r="82%"><stop offset="0" stop-color="#e8492b"/><stop offset="70%" stop-color="#c4321c"/><stop offset="100%" stop-color="#8f2312"/></radialGradient></defs>
+        <path d="M30 88 q18 -8 36 0 q-6 6 -18 6 q-12 0 -18 -6Z" fill="#5b3a1e" opacity=".55"/>
+        <path d="M40 84 C38 70 38 62 42 52 L56 52 C60 62 60 70 58 84 Z" fill="#f3e3c4" stroke="#c8b48c" stroke-width="1.6"/>
+        <path d="M14 52 C14 28 32 14 49 14 C67 14 84 28 84 52 C64 58 34 58 14 52 Z" fill="url(#am${sfx})" stroke="#7d1d0f" stroke-width="2"/>
+        <g fill="#f7ecd6">${dots.map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}"/>`).join("")}</g>
+        <path d="M40 52 q9 5 18 0" fill="none" stroke="#f3e3c4" stroke-width="3" stroke-linecap="round"/>
+      </svg>`;
+    }
     // запасной — иконка
     return `<div class="ex-art ex-art-icon"><i class="bi bi-flower1"></i></div>`;
   }
@@ -348,12 +369,14 @@ window.UI = (function () {
       const balls = [[40,60,22],[72,52,20],[96,66,19],[58,86,20],[88,90,18]];
       const nuts = `<path d="M66 40 q8 -5 12 3 q-7 4 -12 -3Z" fill="#e0a23a"/><path d="M44 70 q-8 -3 -10 5 q8 2 10 -5Z" fill="#d98a3c"/>`;
       let dots = "";
+      // Крошка распределяется по детерминированной спирали: Math.random() рисовал
+      // одну и ту же карточку по-разному при каждом повторном рендере.
       balls.forEach(([cx, cy, r], idx) => {
         for (let k = 0; k < 26; k++) {
-          const a = Math.random() * Math.PI * 2, rr = Math.random() * (r - 3);
+          const a = (k * 2.399963 + idx * 0.7) % (Math.PI * 2);
+          const rr = ((k + 1) / 27) * (r - 3);
           dots += `<circle cx="${(cx + rr * Math.cos(a)).toFixed(1)}" cy="${(cy + rr * Math.sin(a)).toFixed(1)}" r="1" fill="rgba(150,120,90,.4)"/>`;
         }
-        return idx;
       });
       return `
       <svg class="drink-svg" viewBox="0 0 130 120" aria-hidden="true">
@@ -370,7 +393,7 @@ window.UI = (function () {
   // Карточка холодного чая (круглое фото + название + состав + цена)
   function coldCard(item, i) {
     return `
-    <div class="cold-card" data-item="${item.id}">
+    <div class="cold-card" data-card="${item.id}">
       <div class="cold-img">${drinkArt(item.art, "c" + i)}</div>
       <h4 class="cold-name">${item.name}</h4>
       <div class="cold-comp">${item.comp}</div>
@@ -384,7 +407,7 @@ window.UI = (function () {
   // Карточка авторского напитка (Масала, Мате)
   function authorCard(item, i) {
     return `
-    <div class="card author-card" data-item="${item.id}">
+    <div class="card author-card" data-card="${item.id}">
       <div class="author-img">${drinkArt(item.art, "a" + i)}</div>
       <div class="author-text">
         <h4>${item.name}</h4>
@@ -401,7 +424,7 @@ window.UI = (function () {
   // Карточка десерта
   function dessertCard(item, i) {
     return `
-    <div class="card dessert-card" data-item="${item.id}">
+    <div class="card dessert-card" data-card="${item.id}">
       <div class="dessert-text">
         <h4>${item.name}</h4>
         <div class="price dessert-price">${rub(item.price)}</div>

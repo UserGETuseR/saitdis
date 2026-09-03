@@ -220,8 +220,15 @@ create table if not exists chay_publications (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- Советы чайных мастеров — та же таблица публикаций с рубрикой 'advice'
+-- и привязкой к сорту чая. Отдельная сущность не нужна: права, модерация
+-- и синхронизация у публикаций уже настроены.
+alter table chay_publications add column if not exists tea_id text;
+alter table chay_publications drop constraint if exists chay_publications_kind_check;
+alter table chay_publications add constraint chay_publications_kind_check check (kind in ('news','story','tea','event','advice'));
 create index if not exists chay_publications_public on chay_publications(status,audience,published_at desc);
 create index if not exists chay_publications_branch on chay_publications(branch_id,status,updated_at desc);
+create index if not exists chay_publications_tea on chay_publications(tea_id,status) where tea_id is not null;
 
 create table if not exists chay_orders (
   id text primary key,
@@ -243,6 +250,15 @@ create table if not exists chay_orders (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- Способ оплаты выбирает гость: venue — терминал или наличные в чайной,
+-- sbp — перевод по QR. Статус оплаты подтверждает сотрудник или платёжный
+-- сервис, поэтому храним его отдельно от статуса заказа.
+alter table chay_orders add column if not exists payment_method text not null default 'venue';
+alter table chay_orders drop constraint if exists chay_orders_payment_method_check;
+alter table chay_orders add constraint chay_orders_payment_method_check check (payment_method in ('venue','sbp'));
+alter table chay_orders add column if not exists payment_status text not null default 'pending';
+alter table chay_orders drop constraint if exists chay_orders_payment_status_check;
+alter table chay_orders add constraint chay_orders_payment_status_check check (payment_status in ('pending','paid','refunded','cancelled'));
 alter table chay_orders add column if not exists loyalty_credited_at timestamptz;
 alter table chay_orders add column if not exists fulfillment text not null default 'pickup';
 alter table chay_orders add column if not exists contact_phone text not null default '';

@@ -1,7 +1,14 @@
-// ===== Аккаунты и «база данных» (localStorage) =====
-// ВНИМАНИЕ: это клиентский прототип. Пароли хранятся в браузере с простым
-// хэшированием — для демонстрации. Для продакшена нужен реальный бэкенд:
-// хранение хэшей паролей на сервере, HTTPS, JWT/сессии, защита от перебора.
+// ===== Локальный контур аккаунтов (только режим презентации) =====
+//
+// В production аккаунты, пароли и сессии живут на сервере: соленый scrypt,
+// HttpOnly-cookie, журнал аудита (server/src/security.js и production-server.js).
+// Этот модуль работает ТОЛЬКО когда включён демо-режим
+// (config.js: backend "local" + allowDemoAccounts) и нужен для показа
+// приложения без сервера. Хэш здесь намеренно простой — он не защищает
+// ничего ценного и не используется в рабочем контуре.
+//
+// Точка входа в рабочем режиме — assets/js/auth.cloud.js, который при
+// недоступном API не пускает в кабинет вообще, а не переключается сюда.
 
 window.Auth = (function () {
   const DB_KEY = "tea_stories_db_v1";
@@ -72,6 +79,12 @@ window.Auth = (function () {
     });
   }
 
+  // Демо-аккаунты существуют только для локальной презентации без сервера.
+  // На боевом стенде флаг выключен, поэтому ни один пароль-заглушка не создаётся.
+  function demoAllowed() {
+    return typeof window.CHA_DEMO_ALLOWED === "function" && window.CHA_DEMO_ALLOWED() === true;
+  }
+
   function seedIfEmpty() {
     const db = load();
     const has = (login) => db.users.some((u) => (u.login || "").toLowerCase() === login);
@@ -88,6 +101,9 @@ window.Auth = (function () {
         changed = true;
       }
     });
+
+    // Миграции выше применяются всегда, демо-аккаунты — никогда в production.
+    if (!demoAllowed()) { if (changed) persist(db); return; }
 
     if (!has("master")) {
       db.users.push({
@@ -147,7 +163,9 @@ window.Auth = (function () {
       if (name.length < 2) return { ok: false, error: "Введите имя" };
       const lv = this.validateLogin(login);
       if (!lv.ok) return lv;
-      if ((pass || "").length < 4) return { ok: false, error: "Пароль минимум 4 символа" };
+      // Требование совпадает с серверным (production-server.js · cleanPassword),
+      // иначе локально созданный аккаунт не пройдёт регистрацию в облаке.
+      if ((pass || "").length < 8) return { ok: false, error: "Пароль должен содержать минимум 8 символов" };
       if (pass2 !== undefined && pass !== pass2) return { ok: false, error: "Пароли не совпадают" };
       if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Некорректный e-mail" };
       if (phone.replace(/\D/g, "").length < 10) return { ok:false, error:"Укажите номер телефона для карты лояльности" };
@@ -163,7 +181,22 @@ window.Auth = (function () {
       };
       db.users.push(user);
       persist(db);
+      window.Orders?.claimByPhone?.(id, phone);
       localStorage.setItem(SESSION_KEY, id);
+      emit();
+      return { ok: true, user };
+    },
+
+    isDemoAllowed: demoAllowed,
+
+    demoLogin(role) {
+      if (!demoAllowed()) return { ok: false, error: "Демо-вход отключён в рабочем режиме" };
+      seedIfEmpty();
+      const demoIds = { client: "u_client_demo", master: "u_master_demo", admin: "u_admin_demo" };
+      const db = load();
+      const user = db.users.find((entry) => entry.id === demoIds[role]);
+      if (!user) return { ok: false, error: "Демо-профиль не найден" };
+      localStorage.setItem(SESSION_KEY, user.id);
       emit();
       return { ok: true, user };
     },
@@ -181,7 +214,7 @@ window.Auth = (function () {
     changePassword(oldPass, newPass) {
       const u = current(); if (!u) return { ok: false, error: "Не выполнен вход" };
       if (u.pass !== hash(oldPass)) return { ok: false, error: "Текущий пароль неверный" };
-      if ((newPass || "").length < 4) return { ok: false, error: "Новый пароль минимум 4 символа" };
+      if ((newPass || "").length < 8) return { ok: false, error: "Новый пароль должен содержать минимум 8 символов" };
       const db = load();
       const i = db.users.findIndex((x) => x.id === u.id);
       db.users[i].pass = hash(newPass);

@@ -1,51 +1,97 @@
 # Project by Chay — production notes
 
-Public URL: `https://chay.occochi.ru`
+Публичный адрес: `https://chay.occochi.ru`
 
-## Runtime
+## Как устроен запуск
 
-Nginx serves the public PWA and proxies `/api/` to a dedicated Node.js service
-on `127.0.0.1:4410`. PostgreSQL stores accounts, protected sessions, orders,
-inventory, shifts, messages, staff requests, reports, certificates and audit
-events. The API service is described by `server/ops/chay-api.service`.
+Nginx отдаёт публичное PWA и проксирует `/api/` на Node.js-сервис
+`127.0.0.1:4410`. PostgreSQL хранит аккаунты, защищённые сессии, заказы, склад,
+смены, сообщения, заявки, отчёты, сертификаты, лояльность, очередь обмена с 1С
+и журнал аудита. Юнит сервиса — `server/ops/chay-api.service`, шаблон Nginx —
+`ops/chay.occochi.ru.nginx`.
 
-## Data boundary
+## Режимы работы приложения
 
-`assets/js/config.js` selects `backend: "auto"`. On production the same-origin
-API becomes the source of truth. A local static launch automatically falls back
-to browser-only demo data; this fallback must not be confused with production.
+`assets/js/config.js` задаёт два режима, и это главная настройка стенда.
 
-No database password or private key belongs in Git. Production secrets live in
-`/etc/chay-api.env` with mode `0600`.
+- `backend: "auto"` — рабочий режим. Приложение проверяет `/api/health` и работает
+  от сервера. Если API недоступен, каталог остаётся открытым, а вход в кабинет —
+  нет. Приложение **не** переключается в демо-режим: раньше одна неудачная
+  проверка связи открывала локальный доступ с ролью администратора.
+- `backend: "local"` + `allowDemoAccounts: true` — только презентация и разработка
+  без сервера. Единственный режим, где создаются демо-аккаунты и работает быстрый
+  вход по роли.
 
-## Production checks
+Оба условия проверяются вместе (`window.CHA_DEMO_ALLOWED`). На боевом стенде
+`allowDemoAccounts` обязан остаться `false`.
 
-- `GET /api/health` must return `{"ok":true,"service":"chay-api"}`.
-- `systemctl is-active chay-api` must return `active`.
-- Registration always creates a `client`; only an admin/owner can grant staff roles.
-- Passwords use salted scrypt hashes. Browser sessions are `Secure`, `HttpOnly`
-  and `SameSite=Lax`; every privileged mutation is written to the audit log.
-- The local fallback is intentionally not an offline implementation. Offline
-  behavior remains a separate product stage, as agreed.
+## Границы данных
 
-## Release layout
+Сервер — единственный источник истины по остаткам, заказам и лояльности.
+localStorage используется только как буфер интерфейса. Записи, которые сервер
+ещё не принял, сохраняются на устройстве и отправляются повторно; записи,
+подтверждённые сервером и исчезнувшие из его ответа, считаются удалёнными.
 
-The server keeps immutable releases under `/var/www/chay/releases/<git-sha>`.
-`/var/www/chay/current` points to the active release. The Nginx source template
-is `ops/chay.occochi.ru.nginx`.
+Локальный fallback — не офлайн-режим. Полноценная офлайн-работа остаётся
+отдельным этапом продукта.
 
-Only public runtime files are copied into a release:
+## Service worker
+
+`sw.js` не участвует в обработке `/api/` вообще: ни чтения, ни записи не попадают
+в Cache Storage. Это защищает сессию и персональные данные гостей на общем
+устройстве. Кэшируется только статика.
+
+Версия ресурсов задаётся в `sw.js` (`ASSET_VERSION`) и обязана совпадать с
+параметрами `?v=` в `index.html`. Расхождение проверяется тестом
+`server/test/client-contract.test.js`. При выпуске меняются оба значения и
+`CACHE`.
+
+## Проверки после развёртывания
+
+- `GET /api/health` возвращает `{"ok":true,"service":"chay-api"}`.
+- `systemctl is-active chay-api` возвращает `active`.
+- Регистрация всегда создаёт `client`. Роль сотрудника выдаёт только админ или
+  директор — с формы регистрации права получить нельзя.
+- Пароли — соленый scrypt. Минимальная длина 8 символов на клиенте и на сервере.
+- Сессии в браузере `Secure`, `HttpOnly`, `SameSite=Lax`. Каждая привилегированная
+  операция пишется в журнал аудита.
+- Мастер отмечает открытие и закрытие только своей смены.
+- Закрытие заказа списывает остатки и создаёт документы движения.
+
+## Тесты
+
+```bash
+cd server && node --test
+```
+
+55 тестов: безопасность сессий, конечный автомат сертификатов, контракт 1С,
+списание склада, лояльность, правила синхронизации, доступность форм и манифест.
+Тесты не требуют запущенной базы.
+
+## Состав релиза
+
+Сервер держит неизменяемые релизы в `/var/www/chay/releases/<git-sha>`,
+`/var/www/chay/current` указывает на активный. В релиз попадают только публичные
+файлы:
 
 - `index.html`
 - `manifest.webmanifest`
 - `sw.js`
 - `assets/`
-- `img/`
+- `img/` (включая растровые иконки установки `icon-192.png`, `icon-512.png` и maskable-версии)
 - `kp/`
+- `БРЕНБУК/`
 
-The API release is stored separately under `/var/www/chay-api/releases/<git-sha>`
-and contains `server/src`, `server/package.json`, `server/package-lock.json` and
-installed production dependencies.
+API-релиз хранится отдельно в `/var/www/chay-api/releases/<git-sha>` и содержит
+`server/src`, `server/package.json`, `server/package-lock.json` и установленные
+production-зависимости.
 
-This keeps local launch scripts, tests and database notes outside the public
-document root.
+Локальные скрипты запуска, тесты и заметки по базе в публичный каталог не
+копируются.
+
+## Секреты
+
+Ни пароль базы, ни доступ к 1С не хранятся в Git. Боевые значения живут в
+`/etc/chay-api.env` с правами `0600`. Образец переменных — `server/.env.example`.
+Пока переменные `ONEC_*` пустые, обмен выключен, а события накапливаются в
+очереди и уйдут после настройки доступа.

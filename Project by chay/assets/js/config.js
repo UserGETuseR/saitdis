@@ -1,13 +1,26 @@
 // ===== Конфигурация «Чайной истории» =====
-// Единая точка переключения окружения. Сейчас приложение работает локально
-// (localStorage). Когда подключишь Supabase — поменяй backend на 'supabase'
-// и впиши ключи проекта (см. supabase/schema.sql и assets/js/db.supabase.js).
+// Единая точка переключения окружения.
+//
+// backend:
+//   "auto"  — production. Приложение проверяет same-origin API и работает от него.
+//             Если API недоступен, приложение НЕ превращается в демо-стенд:
+//             каталог остаётся доступным, вход и рабочие кабинеты — нет.
+//   "local" — режим презентации и разработки без сервера. Только здесь создаются
+//             демо-аккаунты и работает быстрый вход по роли.
+//
+// allowDemoAccounts держится отдельно от backend намеренно: даже случайная
+// установка backend:"local" на боевом сервере не выдаст админский доступ,
+// пока флаг не включён явно.
 
 window.CHA_CONFIG = {
-  backend: "auto",             // 'auto' probes the same-origin production API; 'local' forces demo mode
+  backend: "auto",
   apiBase: "/api",
-  supabaseUrl: "",             // https://xxxx.supabase.co
-  supabaseAnonKey: "",         // публичный anon-ключ
-  tenantId: null,              // id чайной (для мультиаренды)
-  appVersion: "13",
+  allowDemoAccounts: false,
+  appVersion: "20260903",
+};
+
+// Демо-контур разрешён только когда оба условия совпали явно.
+window.CHA_DEMO_ALLOWED = function () {
+  const cfg = window.CHA_CONFIG || {};
+  return cfg.backend === "local" && cfg.allowDemoAccounts === true;
 };

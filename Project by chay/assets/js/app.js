@@ -26,7 +26,7 @@ window.App = (function () {
   // маршруты, требующие авторизации / роли
   const GUARD = {
     "/client": (u) => u && u.role === "client",
-    "/master": (u) => u && u.role === "master",
+    "/master": (u) => u && ["master", "admin", "owner"].includes(u.role),
     "/admin": (u) => u && (u.role === "admin" || u.role === "owner"),
     "/profile": (u) => !!u,
     "/messages": (u) => !!u,
@@ -37,6 +37,18 @@ window.App = (function () {
   let root;
   let motionObserver;
   let motionController;
+
+  // Экраны с таймерами (заваривание, практики) регистрируют здесь свою
+  // остановку. Без этого интервалы продолжали тикать после ухода со страницы,
+  // писали в удалённый DOM и накапливались при повторном заходе.
+  const cleanups = [];
+  function onLeave(fn) { if (typeof fn === "function") cleanups.push(fn); }
+  function runCleanups() {
+    while (cleanups.length) {
+      const fn = cleanups.pop();
+      try { fn(); } catch (_) {}
+    }
+  }
 
   function mountMotion() {
     if (!root) return;
@@ -106,6 +118,7 @@ window.App = (function () {
   }
 
   function render() {
+    runCleanups();
     let path = currentPath();
     // гвард доступа
     const guard = GUARD[path];
@@ -113,9 +126,19 @@ window.App = (function () {
       window.location.hash = "#/auth";
       path = "/auth";
     }
-    const view = (routes[path] || Views.home)();
+    // Ошибка одного экрана не должна оставлять приложение на предыдущем виде
+    // с рассинхронизированной навигацией: показываем понятное сообщение.
+    let view;
+    try {
+      view = (routes[path] || Views.home)();
+    } catch (error) {
+      console.error("Не удалось построить экран", path, error);
+      view = { html: `<section class="wrap narrow" style="padding:80px 0"><h1>Экран не открылся</h1><p class="muted">Мы уже знаем о сбое. Откройте меню или главную страницу.</p><p><a class="btn primary" href="#/menu">Открыть меню</a> <a class="btn ghost" href="#/">На главную</a></p></section>` };
+    }
     root.innerHTML = view.html;
-    if (view.mount) view.mount(root);
+    if (view.mount) {
+      try { view.mount(root); } catch (error) { console.error("Не удалось подключить экран", path, error); }
+    }
     root.scrollTop = 0;
     window.scrollTo(0, 0);
     renderChrome(path);
@@ -145,10 +168,12 @@ window.App = (function () {
       master: { route: "/master", icon: "bi-grid", label: "Кабинет" },
       admin: { route: "/admin", icon: "bi-speedometer2", label: "Управление" },
     };
-    if (!u) return { links: [L.home, L.preorder, L.alch, L.journal, L.events, L.cert], tab: [L.home, L.preorder, L.alch, L.events, L.cert] };
+    // Практики — полноценный экран с гунфу-таймером и чайным дневником.
+    // Раньше он существовал, но не имел ни одной ссылки в навигации и футере.
+    if (!u) return { links: [L.home, L.preorder, L.brew, L.alch, L.journal, L.med, L.events, L.cert], tab: [L.home, L.preorder, L.brew, L.alch, L.cert] };
     if (u.role === "admin" || u.role === "owner") return { links: [L.admin, L.team, L.journal, L.preorder, L.events, L.med], tab: [L.admin, L.team, L.preorder, L.events, L.med] };
     if (u.role === "master") return { links: [L.master, L.team, L.journal, L.brew, L.preorder, L.med], tab: [L.master, L.team, L.brew, L.preorder, L.med] };
-    return { links: [L.client, L.messages, L.preorder, L.alch, L.cert, L.pass], tab: [L.client, L.messages, L.preorder, L.cert, L.pass] };
+    return { links: [L.client, L.messages, L.preorder, L.brew, L.alch, L.med, L.cert, L.pass], tab: [L.client, L.preorder, L.brew, L.cert, L.pass] };
   }
 
   function renderChrome(path) {
@@ -283,7 +308,9 @@ window.App = (function () {
       </div>`;
     modal.classList.add("open");
     modal.querySelector("[data-close]").addEventListener("click", closeModal);
-    modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+    // onclick вместо addEventListener: узел #modal переиспользуется, и слушатели
+    // иначе накапливались при каждом открытии.
+    modal.onclick = (e) => { if (e.target === modal) closeModal(); };
     modal.querySelectorAll("[data-pick]").forEach((b) =>
       b.addEventListener("click", () => {
         if (b.dataset.consult) {
@@ -302,6 +329,8 @@ window.App = (function () {
     const modal = document.getElementById("modal");
     modal.classList.remove("open");
     modal.innerHTML = "";
+    modal.onclick = null;
+    window.Commerce?.lockScroll?.(false);
   }
 
   function renderCart() {
@@ -341,11 +370,15 @@ window.App = (function () {
   function openCart() {
     document.getElementById("cart").classList.add("open");
     document.getElementById("cartOverlay").classList.add("open");
+    // Фон не прокручивается, пока открыта корзина.
+    window.Commerce?.lockScroll?.(true);
     renderCart();
   }
   function closeCart() {
     document.getElementById("cart").classList.remove("open");
     document.getElementById("cartOverlay").classList.remove("open");
+    // Модалка может быть открыта поверх корзины — тогда блокировку не снимаем.
+    if (!document.getElementById("modal")?.classList.contains("open")) window.Commerce?.lockScroll?.(false);
   }
 
   async function init() {
@@ -365,7 +398,9 @@ window.App = (function () {
     await Auth.initialize();
     if(window.Branches)await Branches.initialize();
     Auth.seedIfEmpty();
-    if (window.Inventory && (!Auth.isCloud() || Auth.isStaff())) Inventory.seedIfEmpty();
+    // Справочник-заготовка создаётся только в локальной презентации:
+    // проверка живёт внутри Inventory.seedIfEmpty.
+    if (window.Inventory) Inventory.seedIfEmpty();
     const cur = Auth.current();
     Store.useUser(cur ? cur.id : null);
     if(cur&&ApiClient.isReady())ApiClient.loyalty.me().then((result)=>Store.setLoyalty(result.loyalty)).catch(()=>{});
@@ -399,7 +434,7 @@ window.App = (function () {
     render();
   }
 
-  return { init, render, renderCart, refreshCart, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, closeCart, afterAuth, logout };
+  return { init, render, onLeave, renderCart, refreshCart, addElixir, addElixirState, addService, addMenuItem, openElixirPicker, openCityPicker, openCart, closeCart, afterAuth, logout };
 })();
 
 document.addEventListener("DOMContentLoaded", App.init);

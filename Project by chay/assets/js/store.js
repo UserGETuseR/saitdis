@@ -139,12 +139,20 @@ window.Store = (function () {
     // ——— Лояльность по реальному заказу ———
     // Начисляет штампы и открытия конкретному пользователю (uid), даже если он
     // не активен (заказ за гостя на кассе мастера). Гостям без аккаунта — пропуск.
+    // Открытия сортов и история пополняются всегда — это чайный паспорт гостя.
+    // Отметки лояльности начисляются только там, где нет сервера: в production
+    // единственный источник отметок — repository.js при переводе заказа в «Готов».
     creditOrder(userId, items) {
       if (!userId || !items || !items.length) return;
       const isCurrent = keyFor(userId) === KEY;
       const st = isCurrent ? state : loadFor(userId);
+      const cloud = !!(window.Auth && Auth.isCloud && Auth.isCloud());
+      if (!cloud) {
+        // Правило совпадает с серверным: отметку даёт напиток, не десерт и не мерч.
+        const drinks = items.filter((it) => it && (it.teaId || ["tea", "drink", "matcha", "elixir"].includes(String(it.kind || ""))));
+        st.stamps += Math.max(1, drinks.length);
+      }
       items.forEach((it) => {
-        st.stamps += 1;
         if (it.teaId && !st.discoveredTeas.includes(it.teaId)) st.discoveredTeas.push(it.teaId);
         if (it.mushroomId && !st.discoveredMushrooms.includes(it.mushroomId)) st.discoveredMushrooms.push(it.mushroomId);
       });

@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const { createRepository } = require("./repository");
 const { hashPassword, verifyPassword, newToken, tokenHash, privacyHash, parseCookies } = require("./security");
 const { createOneCIntegration } = require("./onec");
+const { createOrderAlerts } = require("./alerts");
 
 const PORT = Number(process.env.PORT || 4410);
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -13,6 +14,7 @@ if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
 
 const repo = createRepository(DATABASE_URL);
 const oneC = createOneCIntegration();
+const alerts = createOrderAlerts();
 const loginAttempts = new Map();
 const CERTIFICATE_STATUSES = new Set(["new","contacted","awaiting_payment","confirmed","issued","redeemed","cancelled"]);
 const STAFF = new Set(["master", "admin", "owner"]);
@@ -137,6 +139,7 @@ async function route(req, res) {
     if (await repo.userByPhone(phone)) throw Object.assign(new Error("Этот номер уже привязан к карте лояльности"), { status:409 });
     const pass = await hashPassword(password);
     const row = await repo.createUser({ login,name,email,phone,branchId:data.branchId||"sochi",salt:pass.salt,hash:pass.hash,avatarColor:avatarColor(name+login),profile:defaultProfile() });
+    await repo.claimOrdersByPhone(row.id,phone);
     await repo.audit(row.id,"register","user",row.id,null,{ login:row.login, role:row.role });
     return startSession(req,res,row);
   }
@@ -182,7 +185,7 @@ async function route(req, res) {
   if (req.method === "GET" && path === "/api/loyalty/search") { const current=requireRole(who,STAFF);const phone=cleanPhone(url.searchParams.get("phone"),true);const target=await repo.userByPhone(phone);if(!target||target.role!=="client"||current.role!=="owner"&&target.branch_id!==current.branchId)throw Object.assign(new Error("Карта гостя не найдена"),{status:404});return json(res,200,{ok:true,user:publicUser(target),loyalty:await repo.loyalty(target.id)}); }
   const notificationMatch=path.match(/^\/api\/notifications\/([^/]+)\/read$/);
   if(req.method==="PATCH"&&notificationMatch){const current=requireActor(who);await repo.readNotification(current,notificationMatch[1]);return json(res,200,{ok:true});}
-  if(req.method==="GET"&&path==="/api/integrations/1c/status"){requireRole(who,ADMIN);let probe=null;if(url.searchParams.get("probe")==="1"&&oneC.configured){try{const result=await oneC.probe();probe={ok:true,status:result.status};}catch(error){probe={ok:false,error:error.message};}}return json(res,200,{ok:true,integration:{...oneC.publicConfig,queue:await repo.oneCQueueStatus(),probe}});}
+  if(req.method==="GET"&&path==="/api/integrations/1c/status"){requireRole(who,ADMIN);let probe=null;if(url.searchParams.get("probe")==="1"&&oneC.configured){try{const result=await oneC.probe();probe={ok:true,status:result.status};}catch(error){probe={ok:false,error:error.message};}}return json(res,200,{ok:true,integration:{...oneC.publicConfig,queue:await repo.oneCQueueStatus(),probe},alerts:alerts.publicConfig});}
   if(req.method==="POST"&&path==="/api/inventory/movements"){
     const current=requireRole(who,ADMIN);const data=await body(req);
     const result=await repo.applyInventoryMovement(current,{id:safeId(data.id,"mov"),inventoryId:safeId(data.inventoryId,"inv"),branchId:data.branchId,type:data.type,quantity:data.quantity,reason:data.reason,documentRef:data.documentRef,createdAt:data.createdAt});
@@ -200,11 +203,16 @@ async function route(req, res) {
   }
 
   if(req.method==="POST"&&path==="/api/public/orders"){
-    rateLimit(`order:${clientIp(req)}`,30,60*60_000);const data=await body(req);const items=Array.isArray(data.items)?data.items.slice(0,50):[];if(!items.length)throw Object.assign(new Error("Корзина пуста"),{status:400});const total=Number(data.total)||0;if(total<0||total>1000000)throw Object.assign(new Error("Некорректная сумма"),{status:400});const phone=cleanPhone(data.phone||who?.phone,true);const fulfillment=data.fulfillment==="delivery"?"delivery":"pickup";const address=String(data.address||"").trim();if(fulfillment==="delivery"&&address.length<8)throw Object.assign(new Error("Укажите адрес доставки"),{status:400});const scheduledAt=Number(data.scheduledAt)||0;if(scheduledAt&&scheduledAt<Date.now()-60_000)throw Object.assign(new Error("Время предзаказа уже прошло"),{status:400});const id=safeId(data.id,"ord");await repo.createPublicOrder({id,userId:who?.id,branchId:who?.branchId||data.branchId||"sochi",userName:who?.name||String(data.userName||"Гость").slice(0,100),items,total,phone,fulfillment,address,scheduledAt,notification:data.notification,note:data.note,createdAt:Number(data.createdAt)||Date.now()});return json(res,201,{ok:true,id,status:"new"});
+    rateLimit(`order:${clientIp(req)}`,30,60*60_000);const data=await body(req);const items=Array.isArray(data.items)?data.items.slice(0,50):[];if(!items.length)throw Object.assign(new Error("Корзина пуста"),{status:400});const total=Number(data.total)||0;if(total<0||total>1000000)throw Object.assign(new Error("Некорректная сумма"),{status:400});const phone=cleanPhone(data.phone||who?.phone,true);const fulfillment=data.fulfillment==="delivery"?"delivery":"pickup";const address=String(data.address||"").trim();if(fulfillment==="delivery"&&address.length<8)throw Object.assign(new Error("Укажите адрес доставки"),{status:400});const scheduledAt=Number(data.scheduledAt)||0;const lead=fulfillment==="delivery"?90:30;if(scheduledAt&&scheduledAt<Date.now()+(lead-1)*60_000)throw Object.assign(new Error(`Выберите время минимум через ${lead} минут`),{status:400});if(scheduledAt>Date.now()+31*86400000)throw Object.assign(new Error("Предзаказ доступен не более чем на 30 дней вперёд"),{status:400});const owner=who||await repo.userByPhone(phone);const id=safeId(data.id,"ord");const branchId=owner?.branchId||data.branchId||"sochi";const userName=owner?.name||String(data.userName||"Гость").slice(0,100);const payment=["venue","sbp"].includes(data.payment)?data.payment:"venue";
+    await repo.createPublicOrder({id,userId:owner?.id,branchId,userName,items,total,phone,fulfillment,address,scheduledAt,notification:data.notification,payment,note:data.note,createdAt:Number(data.createdAt)||Date.now()});
+    // Смена узнаёт о заказе сразу. Ошибка оповещения не отменяет заказ:
+    // он уже сохранён и виден в кабинете.
+    alerts.notifyOrder({id,branchId,userName,phone,items,total,fulfillment,address,scheduledAt,payment,note:String(data.note||"")}).catch((error)=>console.error("order alert",error.message));
+    return json(res,201,{ok:true,id,status:"new",payment});
   }
 
   const recordMatch=path.match(/^\/api\/records\/([a-z_]+)(?:\/([^/]+))?$/);
-  if(recordMatch){const name=recordMatch[1],id=recordMatch[2];const current=requireActor(who);const staffOnly=new Set(["staff_requests","shift_reports","service_guides","inventory","inventory_movements","publications","shifts"]);if(staffOnly.has(name))requireRole(current,STAFF);if(req.method==="GET"&&!id)return json(res,200,{ok:true,items:await repo.records.list(name,current)});if(req.method==="PUT"&&!id){const data=await body(req);if(name==="certificates"){requireRole(current,STAFF);if(!CERTIFICATE_STATUSES.has(String(data.status||"")))throw Object.assign(new Error("Некорректный статус сертификата"),{status:400});}if(["inventory","shifts"].includes(name))requireRole(current,ADMIN);if(name==="inventory_movements")throw Object.assign(new Error("Движения создаются через журнал учёта"),{status:405});if(name==="orders"&&current.role==="client")throw Object.assign(new Error("Недостаточно прав"),{status:403});await repo.records.upsert(name,data,current);return json(res,200,{ok:true,id:data.id});}if(req.method==="DELETE"&&id){if(name==="inventory_movements")throw Object.assign(new Error("Документы движения не удаляются"),{status:405});if(["certificates","inventory","shifts"].includes(name))requireRole(current,ADMIN);else requireRole(current,STAFF);await repo.records.remove(name,id,current);return json(res,200,{ok:true});}}
+  if(recordMatch){const name=recordMatch[1],id=recordMatch[2];const current=requireActor(who);const staffOnly=new Set(["staff_requests","shift_reports","service_guides","inventory","inventory_movements","publications","shifts"]);if(staffOnly.has(name))requireRole(current,STAFF);if(req.method==="GET"&&!id)return json(res,200,{ok:true,items:await repo.records.list(name,current)});if(req.method==="PUT"&&!id){const data=await body(req);if(name==="certificates"){requireRole(current,STAFF);if(!CERTIFICATE_STATUSES.has(String(data.status||"")))throw Object.assign(new Error("Некорректный статус сертификата"),{status:400});}if(name==="inventory")requireRole(current,ADMIN);if(name==="service_guides")requireRole(current,ADMIN);if(name==="inventory_movements")throw Object.assign(new Error("Движения создаются через журнал учёта"),{status:405});if(name==="orders"&&current.role==="client")throw Object.assign(new Error("Недостаточно прав"),{status:403});await repo.records.upsert(name,data,current);return json(res,200,{ok:true,id:data.id});}if(req.method==="DELETE"&&id){if(name==="inventory_movements")throw Object.assign(new Error("Документы движения не удаляются"),{status:405});if(["certificates","inventory","shifts","service_guides"].includes(name))requireRole(current,ADMIN);else requireRole(current,STAFF);await repo.records.remove(name,id,current);return json(res,200,{ok:true});}}
 
   return json(res,404,{ok:false,error:"Маршрут не найден"});
 }

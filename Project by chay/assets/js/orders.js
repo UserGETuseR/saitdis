@@ -49,7 +49,7 @@ window.Orders = (function () {
     all: () => {const u=window.Auth?.current?.(),branchId=window.Branches?.current?.().id||u?.branchId||"sochi";return col.all().filter((order)=>u?.role==="client"?order.userId===u.id:(order.branchId||"sochi")===branchId).slice().sort((a, b) => b.ts - a.ts);},
     byId: (id) => col.byId(id),
 
-    create({ userId, userName, masterId, items, channel, fulfillment, phone, address, scheduledAt, notification, note }) {
+    create({ userId, userName, masterId, items, channel, fulfillment, phone, address, scheduledAt, notification, payment, note }) {
       const snap = (items || []).map(snapshot);
       const total = snap.reduce((s, x) => s + (x.price || 0), 0);
       const order = col.insert({
@@ -67,14 +67,18 @@ window.Orders = (function () {
         address: String(address || "").trim(),
         scheduledAt: scheduledAt || null,
         notification: ["in_app", "call", "telegram"].includes(notification) ? notification : "in_app",
+        // venue — оплата в чайной (терминал или наличные), sbp — перевод по СБП.
+        payment: ["venue", "sbp"].includes(payment) ? payment : "venue",
+        paymentStatus: "pending",
         note: String(note || "").trim(),
       });
-      // списываем склад
-      if (window.Inventory) snap.forEach((it) => Inventory.consumeForItem(it));
-      // начисляем лояльность гостю (штампы, открытия, история)
-      // В production начисляет сервер только после статуса «Готов» — так одна
-      // чашка не превращается в две отметки после синхронизации.
-      if (window.Store && order.userId && !(window.Auth && Auth.isCloud && Auth.isCloud())) Store.creditOrder(order.userId, snap);
+      // Списание склада. В облаке этим управляет сервер при переводе заказа
+      // в «Готов», локально — сразу, чтобы демо-стенд оставался связным.
+      if (window.Inventory) snap.forEach((it) => Inventory.consumeForItem(it, order.id));
+      // Чайный паспорт (открытия сортов и история) пополняется всегда.
+      // Отметки лояльности Store начисляет только вне облака — в production их
+      // выдаёт сервер после статуса «Готов», чтобы чашка не удвоилась.
+      if (window.Store && order.userId) Store.creditOrder(order.userId, snap);
       return order;
     },
 
@@ -92,27 +96,48 @@ window.Orders = (function () {
     forUser(userId) { return this.all().filter((o) => o.userId === userId); },
     active() { return this.all().filter((o) => o.status === "new" || o.status === "brewing"); },
 
+    claimByPhone(userId, phone) {
+      const normalized = String(phone || "").replace(/\D/g, "");
+      if (!userId || normalized.length < 10) return 0;
+      let claimed = 0;
+      col.all().forEach((order) => {
+        if (!order.userId && String(order.phone || "").replace(/\D/g, "") === normalized) {
+          col.update(order.id, { userId });
+          claimed += 1;
+        }
+      });
+      return claimed;
+    },
+
     // ——— аналитика для управляющего ———
+    // Считается по выбранному городу: this.all() уже фильтрует по branchId,
+    // тогда как раньше здесь читалась вся коллекция и директор видел выручку
+    // всей сети рядом со списком заказов одного города.
+    // Выручка — только по завершённым заказам. Незакрытые показываются отдельно,
+    // чтобы «Готов» и «Завариваем» не смешивались в одну цифру.
     stats(sinceTs) {
-      const list = sinceTs ? col.query((o) => o.ts >= sinceTs) : col.all();
-      const paid = list.filter((o) => o.status !== "cancelled");
-      const revenue = paid.reduce((s, o) => s + o.total, 0);
-      const count = paid.length;
+      const scope = this.all();
+      const list = sinceTs ? scope.filter((o) => (o.ts || o.createdAt || 0) >= sinceTs) : scope;
+      const done = list.filter((o) => o.status === "done");
+      const active = list.filter((o) => o.status === "new" || o.status === "brewing");
+      const revenue = done.reduce((s, o) => s + (Number(o.total) || 0), 0);
+      const count = done.length;
       const avg = count ? Math.round(revenue / count) : 0;
-      // топ позиций
+      // Топ позиций считается по количеству, а не по числу строк заказа.
+      // Для чая единица измерения — граммы, поэтому в счёт идёт одна подача.
       const tally = {};
-      paid.forEach((o) => o.items.forEach((it) => {
-        const k = it.name;
-        tally[k] = (tally[k] || 0) + 1;
+      done.forEach((o) => (o.items || []).forEach((it) => {
+        if (!it || !it.name) return;
+        const units = it.unit === "g" ? 1 : Math.max(1, Number(it.quantity) || 1);
+        tally[it.name] = (tally[it.name] || 0) + units;
       }));
       const top = Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 6)
         .map(([name, qty]) => ({ name, qty }));
-      // выручка по каналам
       const byChannel = {
-        self: paid.filter((o) => o.channel === "self").reduce((s, o) => s + o.total, 0),
-        pos: paid.filter((o) => o.channel === "pos").reduce((s, o) => s + o.total, 0),
+        self: done.filter((o) => o.channel === "self").reduce((s, o) => s + (Number(o.total) || 0), 0),
+        pos: done.filter((o) => o.channel === "pos").reduce((s, o) => s + (Number(o.total) || 0), 0),
       };
-      return { revenue, count, avg, top, byChannel };
+      return { revenue, count, avg, top, byChannel, activeCount: active.length, activeTotal: active.reduce((s, o) => s + (Number(o.total) || 0), 0) };
     },
 
     subscribe(fn) { DB.subscribe("orders", fn); },

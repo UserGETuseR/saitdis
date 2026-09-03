@@ -11,6 +11,50 @@ const CERTIFICATE_TRANSITIONS = {
   cancelled: new Set(),
 };
 
+// Норма лояльности: шесть отметок дают одну награду.
+const STAMPS_PER_REWARD = 6;
+
+// pg отдаёт колонку типа `date` объектом Date, поэтому String(row.shift_date)
+// даёт "Mon Feb 03 2026 ...". Клиент сравнивает смены по ключу YYYY-MM-DD,
+// и ключ обязан собираться явно, из локальных компонент даты.
+function dateKey(value) {
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  return String(value || "").slice(0, 10);
+}
+
+// Позиции заказа сопоставляются со складом по catalog_id. Чай приходит с
+// граммовкой, грибная добавка — одной порцией, товары — штуками.
+function stockDemands(item) {
+  const quantity = Math.max(1, Number(item && item.quantity) || 1);
+  const grams = Number(item && item.grams) || (item && item.unit === "g" ? quantity : 0);
+  const demands = [];
+  // Коды приводятся к нижнему регистру: сопоставление в SQL идёт по lower(catalog_id).
+  if (item && item.teaId) demands.push({ candidates: [String(item.teaId).toLowerCase()], amount: grams > 0 ? grams : 7, label: item.name || String(item.teaId) });
+  if (item && item.mushroomId) demands.push({ candidates: [String(item.mushroomId).toLowerCase()], amount: 1, label: item.name || String(item.mushroomId) });
+  if (item && !item.teaId && !item.mushroomId) {
+    const sku = String((item && item.sku) || "").trim().toLowerCase();
+    if (!sku) return demands;
+    // Артикул меню выглядит как DESSERT-mochi или CHI-cup. На складе позиция
+    // может быть заведена и полным артикулом, и коротким кодом.
+    const short = sku.includes("-") ? sku.slice(sku.indexOf("-") + 1) : sku;
+    demands.push({ candidates: short && short !== sku ? [sku, short] : [sku], amount: quantity, label: item.name || sku });
+  }
+  return demands;
+}
+
+// Отметки лояльности начисляются за напитки: десерты и мерч чашкой не считаются.
+function loyaltyStamps(items) {
+  const rows = Array.isArray(items) ? items : [];
+  const drinks = rows.filter((item) => {
+    if (!item) return false;
+    if (item.teaId) return true;
+    return ["tea", "drink", "matcha", "elixir"].includes(String(item.kind || ""));
+  });
+  return Math.max(1, drinks.length || 0);
+}
+
 function createRepository(connectionString) {
   const pool = new Pool({ connectionString, max: 12, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 5_000 });
   const q = (text, params) => pool.query(text, params);
@@ -60,7 +104,10 @@ function createRepository(connectionString) {
       const account = (await client.query("select stamps,rewards from chay_loyalty_accounts where user_id=$1 for update", [userId])).rows[0];
       const next = Number(account.stamps) + Number(delta);
       if (next < 0) throw Object.assign(new Error("На карте недостаточно отметок"), { status:409 });
-      const rewards = Math.max(Number(account.rewards), Math.floor(next / 6));
+      // rewards — доступные награды, производные от текущего баланса отметок.
+      // Раньше счётчик только увеличивался, поэтому после списания награды
+      // карта продолжала показывать её как доступную.
+      const rewards = Math.floor(next / STAMPS_PER_REWARD);
       await client.query("update chay_loyalty_accounts set stamps=$2,rewards=$3,updated_at=now() where user_id=$1", [userId,next,rewards]);
       await client.query("insert into chay_loyalty_events(user_id,delta,balance_after,kind,source_key,note,actor_id) values($1,$2,$3,$4,$5,$6,$7)", [userId,delta,next,kind,sourceKey,String(note||"").slice(0,500),actorId]);
       await client.query("commit");
@@ -83,7 +130,53 @@ function createRepository(connectionString) {
   }
 
   function publication(row) {
-    return row ? { id:row.id,branchId:row.branch_id,authorId:row.author_id,authorName:row.author_name,title:row.title,slug:row.slug,excerpt:row.excerpt||"",body:row.body,coverUrl:row.cover_url||"",kind:row.kind,audience:row.audience,status:row.status,featured:row.featured,publishedAt:row.published_at?+new Date(row.published_at):null,createdAt:+new Date(row.created_at),updatedAt:+new Date(row.updated_at) } : null;
+    return row ? { id:row.id,branchId:row.branch_id,authorId:row.author_id,authorName:row.author_name,title:row.title,slug:row.slug,excerpt:row.excerpt||"",body:row.body,coverUrl:row.cover_url||"",kind:row.kind,audience:row.audience,status:row.status,featured:row.featured,teaId:row.tea_id||null,publishedAt:row.published_at?+new Date(row.published_at):null,createdAt:+new Date(row.created_at),updatedAt:+new Date(row.updated_at) } : null;
+  }
+
+  // Списание склада по закрытому заказу.
+  // Идемпотентность обеспечивает первичный ключ движения: id собирается из
+  // номера заказа и кода позиции, повторный перевод в «Готов» ничего не спишет.
+  // Заказ не блокируется из-за нехватки остатка: списываем доступное и
+  // фиксируем расхождение в аудите, чтобы его закрыла инвентаризация.
+  async function applyOrderStock(client, order, actor) {
+    const applied = [];
+    const shortages = [];
+    for (const item of (Array.isArray(order.items) ? order.items : [])) {
+      for (const demand of stockDemands(item)) {
+        const requested = Math.round(Number(demand.amount) * 1000) / 1000;
+        if (!Number.isFinite(requested) || requested <= 0) continue;
+        const found = (await client.query(
+          "select * from chay_inventory where branch_id=$1 and lower(catalog_id)=any($2::text[]) order by array_position($2::text[], lower(catalog_id)) limit 1 for update",
+          [order.branch_id, demand.candidates]
+        )).rows[0];
+        if (!found) { shortages.push({ code: demand.candidates[0], label: demand.label, requested, reason: "not_in_stock_list" }); continue; }
+        const before = Number(found.stock);
+        const amount = Math.min(before, requested);
+        if (amount < requested) shortages.push({ code: found.catalog_id, label: demand.label, requested, available: before, reason: "insufficient_stock" });
+        if (amount <= 0) continue;
+        const after = Math.round((before - amount) * 1000) / 1000;
+        const movementId = `mov_${order.id}_${String(found.catalog_id).replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 40)}`;
+        const movement = (await client.query(
+          "insert into chay_inventory_movements(id,inventory_id,branch_id,catalog_id,movement_type,quantity,stock_before,stock_after,reason,document_ref,actor_id,actor_name,created_at) values($1,$2,$3,$4,'sale',$5,$6,$7,$8,$9,$10,$11,now()) on conflict(id) do nothing returning *",
+          [movementId, found.id, order.branch_id, found.catalog_id, -amount, before, after, `Продажа по заказу ${order.id}`, order.id, actor.id, actor.name]
+        )).rows[0];
+        if (!movement) continue; // движение уже проведено ранее
+        await client.query("update chay_inventory set stock=$2,updated_by=$3,updated_at=now() where id=$1", [found.id, after, actor.id]);
+        const payload = { movementId: movement.id, inventoryId: found.id, branchId: order.branch_id, catalogId: found.catalog_id, type: "sale", quantity: -amount, stockBefore: before, stockAfter: after, orderId: order.id, reason: movement.reason, documentRef: order.id, actorId: actor.id, createdAt: +new Date(movement.created_at) };
+        await client.query(
+          "insert into chay_integration_outbox(event_type,entity_type,entity_id,payload,idempotency_key) values('inventory.movement','inventory',$1,$2,$3) on conflict(idempotency_key) do nothing",
+          [movement.id, JSON.stringify(payload), `inventory.movement:inventory:${movement.id}:${cryptoVersion(payload)}`]
+        );
+        applied.push({ catalogId: found.catalog_id, quantity: amount, stockAfter: after });
+      }
+    }
+    if (applied.length || shortages.length) {
+      await client.query(
+        "insert into chay_audit_log(actor_id,action,entity_type,entity_id,before_data,after_data) values($1,'order_stock','order',$2,$3,$4)",
+        [actor.id, order.id, shortages.length ? JSON.stringify({ shortages }) : null, JSON.stringify({ applied })]
+      );
+    }
+    return { applied, shortages };
   }
 
   async function applyInventoryMovement(actor, data) {
@@ -127,10 +220,10 @@ function createRepository(connectionString) {
       if (name === "publications") return (await q("select * from chay_publications where $1 or branch_id=$2 or author_id=$3 order by updated_at desc limit 500",[owner,branchId,actor.id])).rows.map(publication);
       if (name === "orders") {
         const result = actor.role === "client" ? await q("select * from chay_orders where user_id=$1 order by created_at desc limit 500", [actor.id]) : await q("select * from chay_orders where $1 or branch_id=$2 order by created_at desc limit 500",[owner,branchId]);
-        return result.rows.map((r) => ({ id:r.id,branchId:r.branch_id,userId:r.user_id,userName:r.user_name,masterId:r.master_id,channel:r.channel,status:r.status,items:r.items,total:Number(r.total),fulfillment:r.fulfillment||"pickup",phone:r.contact_phone||"",address:r.delivery_address||"",scheduledAt:r.scheduled_at?+new Date(r.scheduled_at):null,notification:r.notification_channel||"in_app",note:r.customer_note||"",ts:+new Date(r.created_at),createdAt:+new Date(r.created_at) }));
+        return result.rows.map((r) => ({ id:r.id,branchId:r.branch_id,userId:r.user_id,userName:r.user_name,masterId:r.master_id,channel:r.channel,status:r.status,items:r.items,total:Number(r.total),fulfillment:r.fulfillment||"pickup",phone:r.contact_phone||"",address:r.delivery_address||"",scheduledAt:r.scheduled_at?+new Date(r.scheduled_at):null,notification:r.notification_channel||"in_app",payment:r.payment_method||"venue",paymentStatus:r.payment_status||"pending",note:r.customer_note||"",ts:+new Date(r.created_at),createdAt:+new Date(r.created_at) }));
       }
       if (name === "notifications") return (await q("select * from chay_notifications where user_id=$1 or ($2<>'client' and branch_id=$3) order by created_at desc limit 300",[actor.id,actor.role,branchId])).rows.map((r)=>({id:r.id,userId:r.user_id,branchId:r.branch_id,phone:r.phone,kind:r.kind,title:r.title,body:r.body,status:r.status,channel:r.channel,entityType:r.entity_type,entityId:r.entity_id,readAt:r.read_at?+new Date(r.read_at):null,createdAt:+new Date(r.created_at)}));
-      if (name === "shifts") return (await q("select * from chay_shifts where $1 or branch_id=$2 order by branch_id,shift_date,slot",[owner,branchId])).rows.map((r) => ({ id:r.id,branchId:r.branch_id,date:String(r.shift_date).slice(0,10),slot:r.slot,userId:r.user_id,userName:r.user_name,status:r.status,createdAt:+new Date(r.created_at) }));
+      if (name === "shifts") return (await q("select * from chay_shifts where $1 or branch_id=$2 order by branch_id,shift_date,slot",[owner,branchId])).rows.map((r) => ({ id:r.id,branchId:r.branch_id,date:dateKey(r.shift_date),slot:r.slot,userId:r.user_id,userName:r.user_name,status:r.status,createdAt:+new Date(r.created_at) }));
       throw Object.assign(new Error("Unknown collection"), { status: 404 });
     },
 
@@ -153,13 +246,13 @@ function createRepository(connectionString) {
         const before = await one("select status from chay_certificates where id=$1", [id]);
         const nextStatus = data.status || "new";
         if (before && before.status !== nextStatus && !CERTIFICATE_TRANSITIONS[before.status]?.has(nextStatus)) throw Object.assign(new Error("Недопустимый переход статуса сертификата"), { status: 409 });
-        row = await one("insert into chay_certificates(id,buyer_id,branch_id,buyer_name,recipient_name,phone,amount,wish,code,status,contact_note,status_history,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12,jsonb_build_array(jsonb_build_object('status',$10,'at',$11,'by',$13)),to_timestamp($11/1000.0)) on conflict(id) do update set status=excluded.status,contact_note=excluded.contact_note,status_history=case when chay_certificates.status<>excluded.status then chay_certificates.status_history || jsonb_build_array(jsonb_build_object('status',excluded.status,'at',$11,'by',$13)) else chay_certificates.status_history end,confirmed_by=case when excluded.status='confirmed' then $2 else chay_certificates.confirmed_by end,confirmed_at=case when excluded.status='confirmed' then now() else chay_certificates.confirmed_at end,updated_at=now() returning *", [id,data.buyerId||actor.id,branchId,String(data.buyerName||actor.name).slice(0,120),String(data.recipientName||"").slice(0,120),String(data.phone||"").slice(0,40),Number(data.amount),String(data.wish||"").slice(0,1000),String(data.code||"").slice(0,30),nextStatus,Number(data.updatedAt||data.createdAt)||Date.now(),String(data.contactNote||"").slice(0,1000),actor.name]);
+        row = await one("insert into chay_certificates(id,buyer_id,branch_id,buyer_name,recipient_name,phone,amount,wish,code,status,contact_note,status_history,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12,jsonb_build_array(jsonb_build_object('status',$10,'at',$11,'by',$13)),to_timestamp($11/1000.0)) on conflict(id) do update set status=excluded.status,contact_note=excluded.contact_note,status_history=case when chay_certificates.status<>excluded.status then chay_certificates.status_history || jsonb_build_array(jsonb_build_object('status',excluded.status,'at',$11,'by',$13)) else chay_certificates.status_history end,confirmed_by=case when excluded.status='confirmed' then $14 else chay_certificates.confirmed_by end,confirmed_at=case when excluded.status='confirmed' then now() else chay_certificates.confirmed_at end,updated_at=now() returning *", [id,data.buyerId||actor.id,branchId,String(data.buyerName||actor.name).slice(0,120),String(data.recipientName||"").slice(0,120),String(data.phone||"").slice(0,40),Number(data.amount),String(data.wish||"").slice(0,1000),String(data.code||"").slice(0,30),nextStatus,Number(data.updatedAt||data.createdAt)||Date.now(),String(data.contactNote||"").slice(0,1000),actor.name,actor.id]);
       }
       else if (name === "inventory") {row = await one("insert into chay_inventory(id,branch_id,catalog_id,kind,name,unit,stock,par,cat,updated_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(id) do update set kind=excluded.kind,name=excluded.name,unit=excluded.unit,stock=excluded.stock,par=excluded.par,cat=excluded.cat,updated_by=excluded.updated_by,updated_at=now() returning *", [id,branchId,String(data.catalogId||id).slice(0,100),data.kind||"other",String(data.name||"").slice(0,180),String(data.unit||"шт").slice(0,30),Number(data.stock)||0,Number(data.par)||0,data.cat||null,actor.id]);await enqueueOneC("inventory.changed","inventory",id,{id,branchId,catalogId:row.catalog_id,kind:row.kind,name:row.name,unit:row.unit,stock:Number(row.stock),par:Number(row.par),updatedAt:Date.now()});}
       else if (name === "publications") {
         const before=await one("select * from chay_publications where id=$1",[id]);
         if(before&&actor.role==="master"&&before.author_id!==actor.id)throw Object.assign(new Error("Мастер может редактировать только свои материалы"),{status:403});
-        const allowedStatus=new Set(["draft","review","published","archived"]),allowedKind=new Set(["news","story","tea","event"]),allowedAudience=new Set(["public","team"]);
+        const allowedStatus=new Set(["draft","review","published","archived"]),allowedKind=new Set(["news","story","tea","event","advice"]),allowedAudience=new Set(["public","team"]);
         let status=allowedStatus.has(data.status)?data.status:"draft";
         if(actor.role==="master"&&["published","archived"].includes(status))status="review";
         const title=String(data.title||"").trim(),body=String(data.body||"").trim();
@@ -168,23 +261,58 @@ function createRepository(connectionString) {
         if(!/^[a-z0-9][a-z0-9-]{2,90}$/.test(slug))throw Object.assign(new Error("Некорректный адрес публикации"),{status:400});
         const rawCover=String(data.coverUrl||"").trim(),coverUrl=/^(https:\/\/|assets\/|img\/|БРЕНБУК\/assets\/)/.test(rawCover)?rawCover.slice(0,1000):"";
         const publishedAt=status==="published"?(before?.published_at||new Date(Number(data.publishedAt)||Date.now())):before?.published_at||null;
-        row=await one("insert into chay_publications(id,branch_id,author_id,author_name,title,slug,excerpt,body,cover_url,kind,audience,status,featured,published_at,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,to_timestamp($15/1000.0)) on conflict(id) do update set title=excluded.title,slug=excluded.slug,excerpt=excluded.excerpt,body=excluded.body,cover_url=excluded.cover_url,kind=excluded.kind,audience=excluded.audience,status=excluded.status,featured=excluded.featured,published_at=excluded.published_at,updated_at=now() returning *",[id,branchId,before?.author_id||actor.id,before?.author_name||actor.name,title.slice(0,180),slug,String(data.excerpt||"").slice(0,500),body.slice(0,20000),coverUrl,allowedKind.has(data.kind)?data.kind:"news",allowedAudience.has(data.audience)?data.audience:"public",status,actor.role==="master"?false:Boolean(data.featured),publishedAt,Number(data.createdAt)||Date.now()]);
+        // Совет мастера привязан к сорту чая: идентификатор проверяем на формат,
+        // чтобы в колонку не попал произвольный текст.
+        const teaId=/^[a-z0-9_-]{2,60}$/.test(String(data.teaId||""))?String(data.teaId):null;
+        row=await one("insert into chay_publications(id,branch_id,author_id,author_name,title,slug,excerpt,body,cover_url,kind,audience,status,featured,published_at,created_at,tea_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,to_timestamp($15/1000.0),$16) on conflict(id) do update set title=excluded.title,slug=excluded.slug,excerpt=excluded.excerpt,body=excluded.body,cover_url=excluded.cover_url,kind=excluded.kind,audience=excluded.audience,status=excluded.status,featured=excluded.featured,published_at=excluded.published_at,tea_id=excluded.tea_id,updated_at=now() returning *",[id,branchId,before?.author_id||actor.id,before?.author_name||actor.name,title.slice(0,180),slug,String(data.excerpt||"").slice(0,500),body.slice(0,20000),coverUrl,allowedKind.has(data.kind)?data.kind:"news",allowedAudience.has(data.audience)?data.audience:"public",status,actor.role==="master"?false:Boolean(data.featured),publishedAt,Number(data.createdAt)||Date.now(),teaId]);
       }
       else if (name === "orders") {
-        const before=await one("select status,loyalty_credited_at from chay_orders where id=$1",[id]);
-        row = await one("insert into chay_orders(id,user_id,branch_id,user_name,master_id,channel,status,items,total,fulfillment,contact_phone,delivery_address,scheduled_at,notification_channel,customer_note,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,case when $13::text='' then null else to_timestamp($13::bigint/1000.0) end,$14,$15,to_timestamp($16/1000.0)) on conflict(id) do update set master_id=excluded.master_id,status=excluded.status,items=excluded.items,total=excluded.total,fulfillment=excluded.fulfillment,contact_phone=excluded.contact_phone,delivery_address=excluded.delivery_address,scheduled_at=excluded.scheduled_at,notification_channel=excluded.notification_channel,customer_note=excluded.customer_note,updated_at=now() returning *", [id,data.userId||actor.id,branchId,String(data.userName||actor.name).slice(0,120),data.masterId||null,data.channel||"self",data.status||"new",JSON.stringify(data.items||[]),Number(data.total)||0,data.fulfillment==="delivery"?"delivery":"pickup",String(data.phone||"").slice(0,30),String(data.address||"").slice(0,500),data.scheduledAt?String(Number(data.scheduledAt)):"",["in_app","call","telegram"].includes(data.notification)?data.notification:"in_app",String(data.note||"").slice(0,1000),Number(data.ts||data.createdAt)||Date.now()]);
-        if(row.user_id&&row.status==="done"&&!before?.loyalty_credited_at){const delta=Math.max(1,Array.isArray(row.items)?row.items.length:1);await adjustLoyalty({userId:row.user_id,delta,kind:"order",sourceKey:`order:${id}`,note:`Заказ ${id}`,actorId:actor.id});await q("update chay_orders set loyalty_credited_at=now() where id=$1 and loyalty_credited_at is null",[id]);}
+        // Заказ и списание склада сохраняются одной транзакцией: закрытая
+        // продажа не может остаться без движения товара, и наоборот.
+        const client = await pool.connect();
+        let before = null, stock = { applied: [], shortages: [] };
+        try {
+          await client.query("begin");
+          before = (await client.query("select status,loyalty_credited_at from chay_orders where id=$1 for update", [id])).rows[0] || null;
+          row = (await client.query("insert into chay_orders(id,user_id,branch_id,user_name,master_id,channel,status,items,total,fulfillment,contact_phone,delivery_address,scheduled_at,notification_channel,customer_note,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,case when $13::text='' then null else to_timestamp($13::bigint/1000.0) end,$14,$15,to_timestamp($16/1000.0)) on conflict(id) do update set master_id=excluded.master_id,status=excluded.status,items=excluded.items,total=excluded.total,fulfillment=excluded.fulfillment,contact_phone=excluded.contact_phone,delivery_address=excluded.delivery_address,scheduled_at=excluded.scheduled_at,notification_channel=excluded.notification_channel,customer_note=excluded.customer_note,updated_at=now() returning *", [id,data.userId||actor.id,branchId,String(data.userName||actor.name).slice(0,120),data.masterId||null,data.channel||"self",data.status||"new",JSON.stringify(data.items||[]),Number(data.total)||0,data.fulfillment==="delivery"?"delivery":"pickup",String(data.phone||"").slice(0,30),String(data.address||"").slice(0,500),data.scheduledAt?String(Number(data.scheduledAt)):"",["in_app","call","telegram"].includes(data.notification)?data.notification:"in_app",String(data.note||"").slice(0,1000),Number(data.ts||data.createdAt)||Date.now()])).rows[0];
+          // Остатки списываются один раз — при первом переходе заказа в «Готов».
+          if (row.status === "done" && before?.status !== "done") stock = await applyOrderStock(client, row, actor);
+          await client.query("commit");
+        } catch (error) { await client.query("rollback").catch(() => {}); throw error; }
+        finally { client.release(); }
+        // Лояльность идемпотентна по sourceKey, поэтому её безопасно начислять
+        // после фиксации заказа: повтор не создаёт вторую отметку.
+        if(row.user_id&&row.status==="done"&&!before?.loyalty_credited_at){await adjustLoyalty({userId:row.user_id,delta:loyaltyStamps(row.items),kind:"order",sourceKey:`order:${id}`,note:`Заказ ${id}`,actorId:actor.id});await q("update chay_orders set loyalty_credited_at=now() where id=$1 and loyalty_credited_at is null",[id]);}
         if(row.user_id&&before&&before.status!==row.status){const labels={brewing:["Заказ готовят","Чайный мастер начал собирать вашу главу."],done:["Заказ готов","Можно забирать заказ. Отметки лояльности уже начислены."],cancelled:["Заказ отменён","Команда свяжется с вами, если потребуется уточнение."]};const notice=labels[row.status];if(notice)await q("insert into chay_notifications(user_id,branch_id,phone,kind,title,body,channel,entity_type,entity_id) values($1,$2,$3,'order',$4,$5,$6,'order',$7)",[row.user_id,row.branch_id,row.contact_phone||"",notice[0],notice[1],row.notification_channel||"in_app",row.id]);}
-        await enqueueOneC("order.changed","order",id,{id,branchId:row.branch_id,userId:row.user_id,userName:row.user_name,status:row.status,items:row.items,total:Number(row.total),channel:row.channel,updatedAt:Date.now()});
+        await enqueueOneC("order.changed","order",id,{id,branchId:row.branch_id,userId:row.user_id,userName:row.user_name,phone:row.contact_phone||"",status:row.status,items:row.items,total:Number(row.total),channel:row.channel,fulfillment:row.fulfillment,deliveryAddress:row.delivery_address||"",scheduledAt:row.scheduled_at?+new Date(row.scheduled_at):null,customerNote:row.customer_note||"",stockMovements:stock.applied,stockShortages:stock.shortages,updatedAt:Date.now()});
       }
-      else if (name === "shifts") row = await one("insert into chay_shifts(id,branch_id,shift_date,slot,user_id,user_name,status) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set shift_date=excluded.shift_date,slot=excluded.slot,user_id=excluded.user_id,user_name=excluded.user_name,status=excluded.status,updated_at=now() returning *", [id,branchId,data.date,data.slot,data.userId,String(data.userName||"").slice(0,120),data.status||"planned"]);
+      else if (name === "service_guides") {
+        // Памятки сервиса раньше только читались: запись возвращала 404 и
+        // переводила клиент в состояние «синхронизация не удалась».
+        const title=String(data.title||"").trim(), body=String(data.text||data.body||"").trim();
+        if(title.length<3||body.length<10)throw Object.assign(new Error("Заполните заголовок и текст памятки"),{status:400});
+        row = await one("insert into chay_guides(id,title,tag,body,position,active) values($1,$2,$3,$4,$5,true) on conflict(id) do update set title=excluded.title,tag=excluded.tag,body=excluded.body,position=excluded.position,active=excluded.active,updated_at=now() returning *", [id,title.slice(0,180),String(data.tag||"сервис").slice(0,40),body.slice(0,5000),Number(data.position)||0]);
+      }
+      else if (name === "shifts") {
+        // Мастер отмечает открытие и закрытие только своей смены и не может
+        // переназначить её на другого сотрудника или сменить дату.
+        const beforeShift = await one("select * from chay_shifts where id=$1", [id]);
+        if (actor.role === "master") {
+          if (!beforeShift) throw Object.assign(new Error("Смена не найдена"), { status: 404 });
+          if (beforeShift.user_id !== actor.id) throw Object.assign(new Error("Отмечать можно только свою смену"), { status: 403 });
+          if (!["planned","open","closed"].includes(String(data.status||""))) throw Object.assign(new Error("Некорректный статус смены"), { status: 400 });
+          row = await one("update chay_shifts set status=$2,updated_at=now() where id=$1 returning *", [id, data.status]);
+        } else {
+          row = await one("insert into chay_shifts(id,branch_id,shift_date,slot,user_id,user_name,status) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set shift_date=excluded.shift_date,slot=excluded.slot,user_id=excluded.user_id,user_name=excluded.user_name,status=excluded.status,updated_at=now() returning *", [id,branchId,data.date,data.slot,data.userId,String(data.userName||"").slice(0,120),data.status||"planned"]);
+        }
+      }
       else throw Object.assign(new Error("Unknown collection"), { status: 404 });
       await audit(actor.id, "upsert", name, id, null, data);
       return row;
     },
 
     async remove(name, id, actor) {
-      const table = { messages:"chay_messages",staff_requests:"chay_staff_requests",shift_reports:"chay_shift_reports",certificates:"chay_certificates",inventory:"chay_inventory",orders:"chay_orders",shifts:"chay_shifts",publications:"chay_publications" }[name];
+      const table = { messages:"chay_messages",staff_requests:"chay_staff_requests",shift_reports:"chay_shift_reports",certificates:"chay_certificates",inventory:"chay_inventory",orders:"chay_orders",shifts:"chay_shifts",publications:"chay_publications",service_guides:"chay_guides" }[name];
       if (!table) throw Object.assign(new Error("Unknown collection"), { status: 404 });
       const before = await one(`select * from ${table} where id=$1`, [id]);
       if(before?.branch_id&&actor.role!=="owner"&&before.branch_id!==(actor.branch_id||actor.branchId||"sochi"))throw Object.assign(new Error("Запись относится к другому городу"),{status:403});
@@ -195,7 +323,7 @@ function createRepository(connectionString) {
   };
 
   return {
-    pool, q, one, user, branch, publication, audit, records, loyalty, adjustLoyalty, applyInventoryMovement, enqueueOneC, oneCQueueStatus, nextOneCItems, finishOneCItem,
+    pool, q, one, user, branch, publication, audit, records, loyalty, adjustLoyalty, applyInventoryMovement, applyOrderStock, enqueueOneC, oneCQueueStatus, nextOneCItems, finishOneCItem,
     async health() { return one("select now() as now"); },
     async listBranches() { return (await q("select * from chay_branches where active=true order by position,id")).rows.map(branch); },
     async publicPublications(branchId) { const id=branchId?(await requireBranch(branchId)).id:null;return (await q("select * from chay_publications where status='published' and audience='public' and ($1::text is null or branch_id=$1) order by featured desc,published_at desc,created_at desc limit 100",[id])).rows.map(publication); },
@@ -208,6 +336,7 @@ function createRepository(connectionString) {
     async userByPhone(phone) { return one("select * from chay_users where phone=$1 and active=true", [phone]); },
     async userById(id) { return one("select * from chay_users where id=$1 and active=true", [id]); },
     async createUser(data) { const branchId=(await requireBranch(data.branchId||"sochi")).id; return one("insert into chay_users(login,name,email,phone,role,branch_id,password_salt,password_hash,avatar_color,profile) values($1,$2,$3,$4,'client',$5,$6,$7,$8,$9) returning *", [data.login,data.name,data.email||null,data.phone||"",branchId,data.salt,data.hash,data.avatarColor,JSON.stringify(data.profile||{})]); },
+    async claimOrdersByPhone(userId,phone) { if(!userId||!phone)return 0;const result=await q("update chay_orders set user_id=$1,updated_at=now() where user_id is null and contact_phone=$2",[userId,phone]);await q("update chay_notifications set user_id=$1 where user_id is null and phone=$2",[userId,phone]);return result.rowCount; },
     async createSession(data) { return one("insert into chay_sessions(user_id,token_hash,user_agent,ip_hash,expires_at) values($1,$2,$3,$4,$5) returning *", [data.userId,data.tokenHash,data.userAgent,data.ipHash,data.expiresAt]); },
     async sessionByTokenHash(hash) { return one("select s.*,u.login,u.name,u.email,u.phone,u.role,u.branch_id,u.avatar_color,u.profile,u.created_at from chay_sessions s join chay_users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.active=true", [hash]); },
     async touchSession(id) { await q("update chay_sessions set last_seen_at=now() where id=$1 and last_seen_at < now() - interval '10 minutes'", [id]); },
@@ -223,11 +352,17 @@ function createRepository(connectionString) {
     },
     async createPublicOrder(data) {
       const branchId=(await requireBranch(data.branchId||"sochi")).id;
-      const row = await one("insert into chay_orders(id,user_id,branch_id,user_name,channel,status,items,total,fulfillment,contact_phone,delivery_address,scheduled_at,notification_channel,customer_note,created_at) values($1,$2,$3,$4,'self','new',$5,$6,$7,$8,$9,case when $10::text='' then null else to_timestamp($10::bigint/1000.0) end,$11,$12,to_timestamp($13/1000.0)) returning *", [data.id,data.userId||null,branchId,data.userName||"Гость",JSON.stringify(data.items||[]),data.total||0,data.fulfillment==="delivery"?"delivery":"pickup",data.phone||"",data.address||"",data.scheduledAt?String(Number(data.scheduledAt)):"",["in_app","call","telegram"].includes(data.notification)?data.notification:"in_app",String(data.note||"").slice(0,1000),data.createdAt||Date.now()]);
+      const row = await one("insert into chay_orders(id,user_id,branch_id,user_name,channel,status,items,total,fulfillment,contact_phone,delivery_address,scheduled_at,notification_channel,customer_note,created_at,payment_method) values($1,$2,$3,$4,'self','new',$5,$6,$7,$8,$9,case when $10::text='' then null else to_timestamp($10::bigint/1000.0) end,$11,$12,to_timestamp($13/1000.0),$14) returning *", [data.id,data.userId||null,branchId,data.userName||"Гость",JSON.stringify(data.items||[]),data.total||0,data.fulfillment==="delivery"?"delivery":"pickup",data.phone||"",data.address||"",data.scheduledAt?String(Number(data.scheduledAt)):"",["in_app","call","telegram"].includes(data.notification)?data.notification:"in_app",String(data.note||"").slice(0,1000),data.createdAt||Date.now(),["venue","sbp"].includes(data.payment)?data.payment:"venue"]);
       await q("insert into chay_notifications(user_id,branch_id,phone,kind,title,body,channel,entity_type,entity_id) values($1,$2,$3,'order','Предзаказ принят',$4,$5,'order',$6)",[data.userId||null,branchId,data.phone||"",`Заказ ${data.id} передан чайному мастеру.`,["in_app","call","telegram"].includes(data.notification)?data.notification:"in_app",data.id]);
-      await q("insert into chay_messages(id,from_id,branch_id,from_name,from_role,audience,subject,body,status,entity_id,created_at) values($1,$2,$3,$4,'client','team','Новый заказ',$5,'open',$6,to_timestamp($7/1000.0)) on conflict(id) do nothing",[`msg_${data.id}`,data.userId||null,branchId,data.userName||"Гость",`Заказ на ${Number(data.total)||0} ₽ · ${(data.items||[]).length} поз.`,data.id,data.createdAt||Date.now()]);
+      const staffOrderBody = [
+        `Заказ на ${Number(data.total)||0} ₽ · ${(data.items||[]).length} поз.`,
+        data.fulfillment==="delivery"?"доставка":"самовывоз",
+        data.scheduledAt?new Date(Number(data.scheduledAt)).toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"как можно скорее",
+        data.payment==="sbp"?"СБП · отправить QR":"оплата в чайной",
+      ].join(" · ");
+      await q("insert into chay_messages(id,from_id,branch_id,from_name,from_role,audience,subject,body,status,entity_id,created_at) values($1,$2,$3,$4,'client','team','Новый заказ',$5,'open',$6,to_timestamp($7/1000.0)) on conflict(id) do nothing",[`msg_${data.id}`,data.userId||null,branchId,data.userName||"Гость",staffOrderBody,data.id,data.createdAt||Date.now()]);
       await audit(data.userId||null,"create","orders",data.id,null,{ total:data.total, itemCount:(data.items||[]).length });
-      await enqueueOneC("order.created","order",data.id,{id:data.id,branchId,userId:data.userId||null,userName:data.userName||"Гость",phone:data.phone||"",status:"new",items:data.items||[],total:data.total||0,channel:"self",fulfillment:data.fulfillment||"pickup",deliveryAddress:data.address||"",scheduledAt:data.scheduledAt||null,notificationChannel:data.notification||"in_app",customerNote:data.note||"",createdAt:data.createdAt||Date.now()});
+      await enqueueOneC("order.created","order",data.id,{id:data.id,branchId,userId:data.userId||null,userName:data.userName||"Гость",phone:data.phone||"",status:"new",items:data.items||[],total:data.total||0,channel:"self",fulfillment:data.fulfillment||"pickup",deliveryAddress:data.address||"",scheduledAt:data.scheduledAt||null,notificationChannel:data.notification||"in_app",paymentMethod:row.payment_method,paymentStatus:row.payment_status,customerNote:data.note||"",createdAt:data.createdAt||Date.now()});
       return row;
     },
     async updateOwn(id, data) { const branchId=data.branchId!==undefined?(await requireBranch(data.branchId)).id:null;return one("update chay_users set name=coalesce($2,name),login=coalesce($3,login),email=case when $4 then $5 else email end,phone=case when $6 then $7 else phone end,avatar_color=coalesce($8,avatar_color),profile=profile || $9::jsonb,branch_id=case when $10 then $11 else branch_id end,updated_at=now() where id=$1 returning *", [id,data.name||null,data.login||null,data.email!==undefined,data.email||null,data.phone!==undefined,data.phone||"",data.avatarColor||null,JSON.stringify(data.profile||{}),data.branchId!==undefined,branchId]); },
@@ -239,4 +374,4 @@ function createRepository(connectionString) {
   };
 }
 
-module.exports = { createRepository, CERTIFICATE_TRANSITIONS };
+module.exports = { createRepository, CERTIFICATE_TRANSITIONS, dateKey, stockDemands, loyaltyStamps, STAMPS_PER_REWARD };

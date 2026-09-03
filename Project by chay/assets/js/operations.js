@@ -19,7 +19,12 @@ window.Operations = (function () {
     cancelled: "Заявка отменена",
   };
 
+  // Памятки сервиса поставляются вместе со схемой БД (001_production.sql).
+  // Локальная заготовка нужна только презентации без сервера: раньше она
+  // выполнялась у любого посетителя и упиралась в отказ по правам.
   function seedGuides() {
+    if (!(typeof window.CHA_DEMO_ALLOWED === "function" && window.CHA_DEMO_ALLOWED())) return;
+    if (window.ApiClient?.isReady?.()) return;
     if (guides.count()) return;
     [
       { title: "Первое приветствие", tag: "контакт", text: "Поздоровайтесь глазами, дайте гостю освоиться и только затем предложите помощь. Не начинайте с продажи." },
@@ -83,6 +88,9 @@ window.Operations = (function () {
   function setCertificateStatus(id, status, contactNote) {
     const u = user(), current = certificates.byId(id);
     if (!u || !current || !CERTIFICATE_STATUS[status]) return null;
+    // Маршрут сертификата ведёт команда. Без этой проверки покупатель менял
+    // статус локально, видел «Сертификат выпущен», а сервер отвечал отказом.
+    if (!["master", "admin", "owner"].includes(u.role)) return null;
     const at = Date.now(), changed = current.status !== status;
     const updated = certificates.update(id, {
       status,

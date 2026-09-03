@@ -2,7 +2,9 @@
 window.Content = (function () {
   const col = DB.collection("publications");
   let publicCache = null;
-  const KIND = { news:"Новости",story:"Истории",tea:"Чайная карта",event:"Афиша" };
+  // advice — совет чайного мастера о конкретном сорте. Пишет мастер,
+  // публикацию подтверждает управляющая, читают гости в карточке чая.
+  const KIND = { news:"Новости",story:"Истории",tea:"Чайная карта",event:"Афиша",advice:"Совет мастера" };
   const STATUS = { draft:"Черновик",review:"На проверке",published:"Опубликовано",archived:"В архиве" };
   const PRESET = {
     hand:"img/brand/mark-color.png",
@@ -30,13 +32,25 @@ window.Content = (function () {
     let status=["draft","review","published","archived"].includes(data.status)?data.status:"draft";if(u.role==="master"&&["published","archived"].includes(status))status="review";
     const slugBase=slugify(data.slug||title),id=existing?.id||DB.uid("pub"),slug=existing?.slug||`${slugBase}-${id.slice(-6).toLowerCase()}`;
     const custom=String(data.coverUrl||"").trim(),coverUrl=custom||PRESET[data.coverPreset]||PRESET.hand;
-    const record={id,branchId:existing?.branchId||(u.role==="owner"&&data.branchId||u.branchId||branchId()),authorId:existing?.authorId||u.id,authorName:existing?.authorName||u.name,title,slug,excerpt:String(data.excerpt||"").trim().slice(0,500),body:body.slice(0,20000),coverUrl,kind:KIND[data.kind]?data.kind:"news",audience:data.audience==="team"?"team":"public",status,featured:u.role==="master"?false:Boolean(data.featured),publishedAt:status==="published"?(existing?.publishedAt||Date.now()):existing?.publishedAt||null,updatedAt:Date.now(),createdAt:existing?.createdAt||Date.now()};
+    const kind=KIND[data.kind]?data.kind:"news";
+    // Сорт указывается только у совета мастера и должен существовать в каталоге.
+    const teaId=kind==="advice"&&(window.TEAS||[]).some((tea)=>tea.id===data.teaId)?String(data.teaId):null;
+    if(kind==="advice"&&!teaId)throw new Error("Выберите сорт чая, к которому относится совет");
+    const record={id,branchId:existing?.branchId||(u.role==="owner"&&data.branchId||u.branchId||branchId()),authorId:existing?.authorId||u.id,authorName:existing?.authorName||u.name,title,slug,excerpt:String(data.excerpt||"").trim().slice(0,500),body:body.slice(0,20000),coverUrl,kind,teaId,audience:data.audience==="team"?"team":"public",status,featured:u.role==="master"?false:Boolean(data.featured),publishedAt:status==="published"?(existing?.publishedAt||Date.now()):existing?.publishedAt||null,updatedAt:Date.now(),createdAt:existing?.createdAt||Date.now()};
     return existing?col.update(id,record):col.insert(record);
   }
+
+  // Опубликованные советы: все или по конкретному сорту.
+  function advice(teaId) {
+    const list=published().filter((item)=>item.kind==="advice");
+    return teaId?list.filter((item)=>item.teaId===teaId):list;
+  }
+  // Материалы журнала без советов — чтобы лента не смешивалась.
+  function journal() { return published().filter((item)=>item.kind!=="advice"); }
   function transition(id,status) { const item=col.byId(id);if(!item)throw new Error("Материал не найден");return save({...item,status}); }
   async function remove(id) { const item=col.byId(id);if(!item)return;if(item.status!=="draft")throw new Error("Удалить можно только черновик");col.remove(id); }
   function byKey(key) { return (publicCache||col.all()).find((item)=>item.id===key||item.slug===key)||null; }
   function paragraphs(value) { return String(value||"").split(/\n{2,}/).map((part)=>`<p>${esc(part).replace(/\n/g,"<br>")}</p>`).join(""); }
 
-  return { KIND,STATUS,PRESET,esc,slugify,words,readingTime,all,published,refreshPublic,save,transition,remove,byKey,paragraphs };
+  return { KIND,STATUS,PRESET,esc,slugify,words,readingTime,all,published,advice,journal,refreshPublic,save,transition,remove,byKey,paragraphs };
 })();

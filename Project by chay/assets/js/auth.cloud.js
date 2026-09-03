@@ -8,10 +8,14 @@
   let publicTeam = [];
   const listeners = [];
 
+  const demoAllowed = () => typeof window.CHA_DEMO_ALLOWED === "function" && window.CHA_DEMO_ALLOWED() === true;
   const initials = (name) => String(name || "?").trim().split(/\s+/).slice(0,2).map((word) => word[0]).join("").toUpperCase();
   function normalize(user) { return user ? { ...user, initials: initials(user.name), profile: user.profile || {} } : null; }
   function emit() { listeners.forEach((fn) => { try { fn(current()); } catch (_) {} }); }
-  function current() { return cloud ? currentUser : LocalAuth.current(); }
+  // Вне демо-режима локальная сессия не считается входом: единственный источник
+  // прав — защищённая серверная сессия.
+  function current() { return cloud ? currentUser : (demoAllowed() ? LocalAuth.current() : null); }
+  const OFFLINE = { ok: false, error: "Нет связи с сервером чайной. Обновите страницу или попробуйте позже." };
   function setCurrent(user) { currentUser = normalize(user); emit(); return currentUser; }
   async function refreshUsers() {
     if (!cloud || !currentUser || !["master","admin","owner"].includes(currentUser.role)) { users = currentUser ? [currentUser] : []; return users; }
@@ -23,7 +27,9 @@
   const facade = {
     async initialize() {
       cloud = await ApiClient.init();
-      if (!cloud) { LocalAuth.seedIfEmpty(); return LocalAuth.current(); }
+      // Локальный контур поднимается только в явно разрешённом демо-режиме.
+      // В production недоступный API означает «нет связи», а не «войди как admin».
+      if (!cloud) { if (demoAllowed()) LocalAuth.seedIfEmpty(); return demoAllowed() ? LocalAuth.current() : null; }
       const result = await ApiClient.auth.me();
       setCurrent(result.user);
       await refreshUsers();
@@ -40,14 +46,19 @@
     validateLogin: LocalAuth.validateLogin.bind(LocalAuth),
     isLoginTaken(login, exceptId) { return cloud ? users.some((u) => u.id !== exceptId && u.login.toLowerCase() === String(login).toLowerCase()) : LocalAuth.isLoginTaken(login, exceptId); },
     async register(data) {
-      if (!cloud) return LocalAuth.register(data);
+      if (!cloud) return demoAllowed() ? LocalAuth.register(data) : OFFLINE;
       try { const result = await ApiClient.auth.register(data); setCurrent(result.user); await refreshUsers(); await refreshTeam(); await ApiClient.hydrate(currentUser); return { ok:true, user:currentUser }; }
       catch (error) { return { ok:false, error:error.message }; }
     },
     async login(login, pass) {
-      if (!cloud) return LocalAuth.login(login, pass);
+      if (!cloud) return demoAllowed() ? LocalAuth.login(login, pass) : OFFLINE;
       try { const result = await ApiClient.auth.login(login, pass); setCurrent(result.user); await refreshUsers(); await refreshTeam(); await ApiClient.hydrate(currentUser); return { ok:true, user:currentUser }; }
       catch (error) { return { ok:false, error:error.message }; }
+    },
+    isDemoAllowed: demoAllowed,
+    async demoLogin(role) {
+      if (cloud || !demoAllowed()) return { ok:false, error:"Демо-вход недоступен в рабочем режиме" };
+      return LocalAuth.demoLogin(role);
     },
     logout() {
       if (!cloud) return LocalAuth.logout();
@@ -75,7 +86,9 @@
     },
     listClients: () => {const branchId=window.Branches?.current?.().id||current()?.branchId||"sochi",source=cloud?users:LocalAuth.listClients();return source.filter((u)=>u.role==="client"&&(u.branchId||"sochi")===branchId);},
     listAll: () => cloud ? users.slice() : LocalAuth.listAll(),
-    listStaff: () => {const branchId=window.Branches?.current?.().id||current()?.branchId||"sochi",source=cloud?users:LocalAuth.listStaff();return source.filter((u)=>u.role==="owner"||(u.branchId||"sochi")===branchId);},
+    // /api/users отдаёт всех активных пользователей города, поэтому роль
+    // фильтруется здесь: иначе гости попадают в список персонала.
+    listStaff: () => {const branchId=window.Branches?.current?.().id||current()?.branchId||"sochi",source=cloud?users:LocalAuth.listStaff();return source.filter((u)=>["master","admin","owner"].includes(u.role)).filter((u)=>u.role==="owner"||(u.branchId||"sochi")===branchId);},
     listPublicTeam: () => cloud ? publicTeam.slice() : LocalAuth.listStaff(),
     refreshTeam,
     userById: (id) => cloud ? users.find((u)=>u.id===id)||null : LocalAuth.userById(id),

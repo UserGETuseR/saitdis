@@ -13,9 +13,12 @@ window.Shifts = (function () {
     evening: { label: "Вечер", time: "15:00–22:00", icon: "bi-sunset" },
   };
 
+  // Ключ даты берётся из локального времени чайной. toISOString() отдаёт UTC,
+  // и в московском поясе с 00:00 до 03:00 «сегодня» показывалось вчерашним.
+  // То же правило используется в оформлении заказа (commerce.js · localDate).
   function todayKey(d) {
     const x = d || new Date();
-    return x.toISOString().slice(0, 10);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
   }
 
   return {
@@ -31,7 +34,16 @@ window.Shifts = (function () {
       return col.insert({ branchId,date, slot, userId, userName, status: "planned" });
     },
     remove(id) { col.remove(id); },
-    setStatus(id, status) { return col.update(id, { status }); },
+    // Мастер отмечает только свою смену — то же правило проверяет сервер
+    // (repository.js · records.upsert, ветка shifts).
+    setStatus(id, status) {
+      const shift = col.byId(id);
+      if (!shift) return null;
+      const user = window.Auth?.current?.();
+      if (user && user.role === "master" && shift.userId !== user.id) return null;
+      if (!["planned", "open", "closed"].includes(status)) return null;
+      return col.update(id, { status });
+    },
 
     forUser(userId) {
       return this.all().filter((s) => s.userId === userId).sort((a, b) => a.date.localeCompare(b.date));
